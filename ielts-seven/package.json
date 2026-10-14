@@ -1,0 +1,18 @@
+{
+  "name": "xunci-ielts-seven",
+  "version": "1.1.0",
+  "private": true,
+  "description": "IELTS vocabulary and reading practice with private account-scoped learning records",
+  "scripts": {
+    "test": "node --test tests/*.test.cjs",
+    "db:generate": "drizzle-kit generate",
+    "build": "node scripts/build-worker.mjs",
+    "dev": "node scripts/dev-server.mjs"
+  },
+  "dependencies": {
+    "drizzle-orm": "^0.45.2"
+  },
+  "devDependencies": {
+    "drizzle-kit": "^0.31.10"
+  }
+}

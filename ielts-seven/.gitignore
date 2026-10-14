@@ -1,0 +1,9 @@
+*.tar.gz
+*.png
+!dist/assets/*.png
+node_modules/
+__pycache__/
+.env*
+.openai/*.tmp
+.artifact/
+.wrangler/
