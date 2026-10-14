@@ -3,7 +3,12 @@ import { glob } from 'astro/loaders';
 import { z } from 'astro/zod';
 
 const notes = defineCollection({
-  loader: glob({ pattern: '**/*.mdx', base: './src/content/notes' }),
+  loader: glob({
+    pattern: '**/*.mdx',
+    base: './src/content/notes',
+    // Keep collection IDs language-specific; the public slug can match.
+    generateId: ({ entry }) => entry.replace(/\.mdx$/, ''),
+  }),
   schema: z.object({
     title: z.string(),
     description: z.string(),
