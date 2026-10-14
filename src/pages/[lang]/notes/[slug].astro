@@ -1,0 +1,29 @@
+---
+import { getCollection, render, type CollectionEntry } from 'astro:content';
+import { ArrowLeft } from '@lucide/astro';
+import BaseLayout from '../../../layouts/BaseLayout.astro';
+import { localizedPath } from '../../../lib/site';
+
+export async function getStaticPaths() {
+  const notes = await getCollection('notes');
+  return notes.map((note) => ({
+    params: { lang: note.data.language, slug: note.data.slug },
+    props: { note },
+  }));
+}
+interface Props { note: CollectionEntry<'notes'> }
+const { note } = Astro.props;
+const language = note.data.language;
+const { Content } = await render(note);
+---
+<BaseLayout language={language} title={note.data.title} description={note.data.description}>
+  <article class="page prose" data-pagefind-body>
+    <a href={localizedPath(language, '#notes')} class="text-link" data-pagefind-ignore>
+      <ArrowLeft size={17} aria-hidden="true" />{language === 'zh' ? '返回笔记' : 'Back to notes'}
+    </a>
+    <p class="eyebrow">{note.data.date.toISOString().slice(0, 10)}</p>
+    <h1 data-pagefind-meta="title">{note.data.title}</h1>
+    <p class="lead">{note.data.description}</p>
+    <Content />
+  </article>
+</BaseLayout>

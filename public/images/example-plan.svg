@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="800" viewBox="0 0 1200 800">
+  <rect width="1200" height="800" fill="#e6e9e0"/>
+  <g fill="none" stroke="#394a38" stroke-width="3">
+    <rect x="180" y="170" width="840" height="460"/>
+    <path d="M180 390h400V170M580 390v240M800 170v460"/>
+    <rect x="260" y="230" width="220" height="100"/><rect x="670" y="450" width="260" height="110"/>
+    <circle cx="370" cy="520" r="65"/><circle cx="900" cy="290" r="55"/>
+  </g>
+  <path d="M120 700 350 600 590 350 860 400 1100 120" fill="none" stroke="#a73c32" stroke-width="7"/>
+  <text x="60" y="75" fill="#394a38" font-size="25" font-family="sans-serif">EXAMPLE / PLAN &amp; PATHS</text>
+  <text x="60" y="755" fill="#697266" font-size="19" font-family="sans-serif">Replace with your own project image</text>
+</svg>

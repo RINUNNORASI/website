@@ -1,0 +1,55 @@
+---
+import { getCollection } from 'astro:content';
+import { ArrowRight } from '@lucide/astro';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Gallery from '../../components/Gallery.astro';
+import { languages, localizedPath, text, type Language } from '../../lib/site';
+
+export function getStaticPaths() {
+  return languages.map((language) => ({ params: { lang: language }, props: { language } }));
+}
+interface Props { language: Language }
+const { language } = Astro.props;
+const t = text[language];
+const notes = (await getCollection('notes', (entry) => entry.data.language === language))
+  .sort((a, b) => b.data.date.getTime() - a.data.date.getTime());
+const images = [
+  { src: 'images/example-plan.svg', alt: language === 'zh' ? '示例图 · 平面与路径' : 'Example · plan & paths', width: 1200, height: 800 },
+  { src: 'images/example-section.svg', alt: language === 'zh' ? '示例图 · 剖面与空间' : 'Example · section & space', width: 1200, height: 800 },
+];
+---
+<BaseLayout language={language}>
+  <div data-pagefind-body>
+    <section class="hero" data-reveal>
+      <p class="eyebrow">PORTFOLIO / RESEARCH / NOTES</p>
+      <h1 data-pagefind-meta="title">{t.hero}</h1>
+      <p class="hero-copy">{t.intro}</p>
+      <a href="#work" class="text-link">{t.projects}<ArrowRight size={19} aria-hidden="true" /></a>
+    </section>
+    <section id="work" class="section" data-reveal>
+      <div class="section-heading"><h2>{t.projects}</h2><span>01</span></div>
+      <article class="project">
+        <div class="project-heading">
+          <h3>{t.sample}</h3>
+          <p>{t.sampleDescription}</p>
+        </div>
+        <Gallery images={images} language={language} />
+      </article>
+    </section>
+    <section id="notes" class="section" data-reveal>
+      <div class="section-heading"><h2>{t.recentNotes}</h2><span>02</span></div>
+      <div class="note-list">
+        {notes.map((note) => (
+          <a class="note-row" href={localizedPath(language, 'notes/' + note.data.slug + '/')}>
+            <div>
+              <p class="eyebrow">{note.data.date.toISOString().slice(0, 10)}</p>
+              <h3>{note.data.title}</h3>
+              <p>{note.data.description}</p>
+            </div>
+            <ArrowRight size={22} aria-hidden="true" />
+          </a>
+        ))}
+      </div>
+    </section>
+  </div>
+</BaseLayout>

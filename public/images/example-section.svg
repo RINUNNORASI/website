@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="800" viewBox="0 0 1200 800">
+  <rect width="1200" height="800" fill="#ebe6df"/>
+  <path d="M80 610h1040M180 610V230h840v380M180 420h840M490 230v380M760 230v190" fill="none" stroke="#394a38" stroke-width="5"/>
+  <path d="M150 610h160l180-190h270l210-190h100" fill="none" stroke="#a73c32" stroke-width="7"/>
+  <g fill="#c7cdbd"><rect x="240" y="460" width="170" height="150"/><rect x="820" y="300" width="150" height="120"/></g>
+  <text x="60" y="75" fill="#394a38" font-size="25" font-family="sans-serif">EXAMPLE / SECTION &amp; SPACE</text>
+  <text x="60" y="755" fill="#697266" font-size="19" font-family="sans-serif">Replace with your own project image</text>
+</svg>

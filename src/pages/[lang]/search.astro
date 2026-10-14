@@ -1,0 +1,19 @@
+---
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import SearchBox from '../../components/SearchBox.astro';
+import { languages, text, type Language } from '../../lib/site';
+
+export function getStaticPaths() {
+  return languages.map((language) => ({ params: { lang: language }, props: { language } }));
+}
+interface Props { language: Language }
+const { language } = Astro.props;
+const t = text[language];
+---
+<BaseLayout language={language} title={t.searchTitle}>
+  <section class="page" data-pagefind-ignore>
+    <p class="eyebrow">SEARCH</p>
+    <h1>{t.searchTitle}</h1>
+    <SearchBox language={language} />
+  </section>
+</BaseLayout>

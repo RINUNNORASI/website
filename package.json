@@ -1,0 +1,30 @@
+{
+  "name": "personal-website",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "dev": "astro dev",
+    "check": "astro check",
+    "build": "astro build && pagefind --site dist",
+    "preview": "astro preview",
+    "verify:build": "node scripts/verify-build.mjs"
+  },
+  "dependencies": {
+    "astro": "^7.3.8",
+    "@astrojs/mdx": "^8.0.3",
+    "@tailwindcss/vite": "^4.3.3",
+    "tailwindcss": "^4.3.3",
+    "@lucide/astro": "^1.56.0",
+    "photoswipe": "^5.4.4",
+    "motion": "^12.0.0"
+  },
+  "devDependencies": {
+    "@astrojs/check": "^0.9.4",
+    "typescript": "~5.9.3",
+    "pagefind": "^1.5.2"
+  }
+}

@@ -1,0 +1,18 @@
+---
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import { languages, text, type Language } from '../../lib/site';
+
+export function getStaticPaths() {
+  return languages.map((language) => ({ params: { lang: language }, props: { language } }));
+}
+interface Props { language: Language }
+const { language } = Astro.props;
+const t = text[language];
+---
+<BaseLayout language={language} title={t.aboutTitle}>
+  <article class="page prose" data-pagefind-body>
+    <p class="eyebrow">ABOUT</p>
+    <h1 data-pagefind-meta="title">{t.aboutTitle}</h1>
+    <p>{t.aboutText}</p>
+  </article>
+</BaseLayout>

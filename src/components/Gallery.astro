@@ -1,0 +1,54 @@
+---
+import { Expand } from '@lucide/astro';
+import 'photoswipe/style.css';
+import { withBase, type Language } from '../lib/site';
+
+interface GalleryImage {
+  src: string;
+  alt: string;
+  width: number;
+  height: number;
+}
+interface Props {
+  images: GalleryImage[];
+  language: Language;
+}
+const { images, language } = Astro.props;
+const label = language === 'zh' ? '点击查看大图' : 'Open full-size image';
+---
+<div data-gallery class="grid gap-4 sm:grid-cols-2">
+  {images.map((image) => (
+    <figure>
+      <a
+        href={withBase(image.src)}
+        data-gallery-item
+        data-pswp-width={image.width}
+        data-pswp-height={image.height}
+        aria-label={label + ': ' + image.alt}
+        class="gallery-link"
+      >
+        <img src={withBase(image.src)} alt={image.alt} width={image.width} height={image.height} loading="lazy" />
+        <span class="gallery-expand" aria-hidden="true"><Expand size={18} /></span>
+      </a>
+      <figcaption>{image.alt}</figcaption>
+    </figure>
+  ))}
+</div>
+<script>
+  import PhotoSwipeLightbox from 'photoswipe/lightbox';
+
+  const isChinese = document.documentElement.lang === 'zh';
+  document.querySelectorAll<HTMLElement>('[data-gallery]').forEach((gallery) => {
+    const lightbox = new PhotoSwipeLightbox({
+      gallery,
+      children: 'a[data-gallery-item]',
+      pswpModule: () => import('photoswipe'),
+      closeTitle: isChinese ? '关闭' : 'Close',
+      zoomTitle: isChinese ? '缩放' : 'Zoom',
+      arrowPrevTitle: isChinese ? '上一张' : 'Previous',
+      arrowNextTitle: isChinese ? '下一张' : 'Next',
+      showHideAnimationType: 'fade',
+    });
+    lightbox.init();
+  });
+</script>

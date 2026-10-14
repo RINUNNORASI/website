@@ -1,0 +1,73 @@
+---
+import { ArrowUpRight, Search } from '@lucide/astro';
+import '../styles/global.css';
+import { localizedPath, text, withBase, type Language } from '../lib/site';
+
+interface Props {
+  language: Language;
+  title?: string;
+  description?: string;
+}
+
+const { language, title, description } = Astro.props;
+const t = text[language];
+const otherLanguage: Language = language === 'zh' ? 'en' : 'zh';
+const base = import.meta.env.BASE_URL.replace(/\/?$/, '/');
+const relativePath = Astro.url.pathname.startsWith(base)
+  ? Astro.url.pathname.slice(base.length)
+  : '';
+const suffix = relativePath.split('/').slice(1).join('/');
+const alternate = localizedPath(otherLanguage, suffix);
+const canonical = Astro.site ? new URL(Astro.url.pathname, Astro.site).href : undefined;
+---
+<!doctype html>
+<html lang={language}>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content={description ?? t.description} />
+    <meta name="theme-color" content="#f6f5f1" />
+    <meta property="og:title" content={title ? title + ' · ' + t.siteTitle : t.siteTitle} />
+    <meta property="og:description" content={description ?? t.description} />
+    {canonical && <link rel="canonical" href={canonical} />}
+    <link rel="icon" type="image/svg+xml" href={withBase('favicon.svg')} />
+    <title>{title ? title + ' · ' + t.siteTitle : t.siteTitle}</title>
+  </head>
+  <body>
+    <a href="#main" class="skip-link">{t.skip}</a>
+    <header class="site-header" data-pagefind-ignore>
+      <a href={localizedPath(language)} class="wordmark" aria-label={t.home}>
+        <span class="mark" aria-hidden="true"></span>{t.siteTitle}
+      </a>
+      <nav aria-label={language === 'zh' ? '主导航' : 'Main navigation'}>
+        <a href={localizedPath(language, '#work')}>{t.work}</a>
+        <a href={localizedPath(language, '#notes')}>{t.notes}</a>
+        <a href={localizedPath(language, 'about/')}>{t.about}</a>
+        <a href={localizedPath(language, 'search/')} class="icon-link">
+          <Search size={17} aria-hidden="true" /><span>{t.search}</span>
+        </a>
+        <a href={alternate} lang={otherLanguage} class="language-link">
+          {otherLanguage === 'en' ? 'EN' : '中文'}
+        </a>
+      </nav>
+    </header>
+    <main id="main" tabindex="-1">
+      <slot />
+    </main>
+    <footer class="site-footer" data-pagefind-ignore>
+      <span>© {new Date().getFullYear()} RINUNNORASI · {t.footer}</span>
+      <a href="https://github.com/RINUNNORASI/website">
+        GitHub <ArrowUpRight size={16} aria-hidden="true" />
+      </a>
+    </footer>
+    <script>
+      import { animate, inView } from 'motion';
+
+      if (!window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+        inView('[data-reveal]', (element) => {
+          animate(element, { opacity: [0, 1], y: [12, 0] }, { duration: 0.35 });
+        });
+      }
+    </script>
+  </body>
+</html>

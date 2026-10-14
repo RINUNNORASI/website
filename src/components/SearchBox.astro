@@ -1,0 +1,25 @@
+---
+import { text, withBase, type Language } from '../lib/site';
+interface Props { language: Language }
+const { language } = Astro.props;
+const bundlePath = withBase('pagefind/');
+---
+{import.meta.env.DEV ? (
+  <p class="quiet" role="status">{text[language].searchDev}</p>
+) : (
+  <>
+    <link rel="stylesheet" href={bundlePath + 'pagefind-ui.css'} />
+    <script is:inline src={bundlePath + 'pagefind-ui.js'}></script>
+    <div id="search"></div>
+    <script is:inline define:vars={{ bundlePath }}>
+      if (window.PagefindUI) {
+        new window.PagefindUI({
+          element: '#search',
+          bundlePath,
+          showSubResults: true,
+          showImages: false,
+        });
+      }
+    </script>
+  </>
+)}

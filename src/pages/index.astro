@@ -1,0 +1,17 @@
+---
+import { localizedPath } from '../lib/site';
+const destination = localizedPath('zh');
+---
+<!doctype html>
+<html lang="zh">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta http-equiv="refresh" content={'0;url=' + destination} />
+    <title>作品与研究</title>
+  </head>
+  <body data-pagefind-ignore>
+    <a href={destination}>进入中文网站</a>
+    <a href={localizedPath('en')}>Read in English</a>
+  </body>
+</html>
