@@ -39,7 +39,7 @@ const server=http.createServer(async(req,res)=>{
     if(user){headers.set('oai-authenticated-user-id',user);headers.set('oai-authenticated-user-email',user+'@sites.test');}
     const chunks=[];for await(const chunk of req)chunks.push(chunk);
     const body=Buffer.concat(chunks);const request=new Request(url,{method:req.method,headers,...(!['GET','HEAD'].includes(req.method)&&body.length?{body,duplex:'half'}:{})});
-    const response=await worker.fetch(request,{DB,EDITOR_EMAIL:'local-alpha@sites.test'});res.writeHead(response.status,Object.fromEntries(response.headers));res.end(Buffer.from(await response.arrayBuffer()));
+    const response=await worker.fetch(request,{DB,EDITOR_EMAIL:'local-alpha@sites.test'});const outgoing=Object.fromEntries(response.headers);const cookies=response.headers.getSetCookie();if(cookies.length)outgoing['set-cookie']=cookies;res.writeHead(response.status,outgoing);res.end(Buffer.from(await response.arrayBuffer()));
   }catch(error){res.writeHead(500);res.end('Local QA adapter error: '+error.message);}
 });
 server.listen(4173,'127.0.0.1',()=>console.log('Local QA: http://127.0.0.1:4173/signin-with-chatgpt?dev_user=local-alpha'));

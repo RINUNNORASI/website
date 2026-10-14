@@ -16,11 +16,19 @@ Excel 根据当前账号的实际最近导出日期与新增词数决定：至�
 
 **GitHub 保存源码与版本；私密学习记录存数据库。** GitHub Pages 只能托管 `dist/` 中的静态前端，不能单独运行本项目的登录、同步 API、数据库或 MCP。若要迁往 Pages，必须另接带身份认证和用户隔离的后端，并调整 API 地址与身份流程。
 
-当前源码适用于 Sites 托管站点：前端和 `worker/index.mjs` 同源，使用 Sites 原生登录网关提供的可信身份头，D1 绑定名为 `DB`。这些身份头必须由受信网关产生，不能直接把此 Worker 暴露在无认证的公网并信任客户端自填的身份头。换其他平台时，需替换为真实登录与服务端验证。
+当前源码适用于 Sites 受管站点：前端和 `worker/index.mjs` 同源，原登录使用 Sites 原生网关提供的可信身份头；配置启用邮箱后由服务器验证邮箱会话。D1 绑定名为 `DB`。原登录的身份头必须由受信网关产生，不能直接把此 Worker 暴露在无认证的公网并信任客户端自填的身份头。换其他平台时，需配置真实登录与服务端验证。
 
-`.openai/hosting.json` 只含可移植的资源声明，**没有关联任何已有站点身份**。部署自己的副本前，使用 Sites 创建自己的站点，并将自己的 `project_id` 写入本地声明；启用私人访问、D1 与 MCP 后再按 Sites 的源码/部署流程发布。不要复用其他人的站点或数据库标识。
+`.openai/hosting.json` 只含可移植的资源声明，**没有关联任何已有站点身份**。部署自己的副本前，使用 Sites 创建自己的站点，并将自己的 `project_id` 写入本地声明；按所选登录模式设置访问控制、D1 与 MCP 后，再按 Sites 的源码/部署流程发布。不要复用其他人的站点或数据库标识。
 
 每日文章通过账号范围内的 MCP 发布进 D1 并进入档案，无需重部署。日程须由部署者自行连接并启用；本仓库不代表任何日程已运行或具体模型档位已锁定。完整课程规则见 [docs/DAILY_REQUIREMENTS.md](docs/DAILY_REQUIREMENTS.md)。
+
+## 独立邮箱登录
+
+接入代码默认使用 Supabase 邮件登录链接（Magic Link + PKCE），包含浏览器绑定、一次性回调、服务端会话、刷新、退出和发送限流；配置自定义 SMTP 与验证码模板后可选 OTP。浏览器持有 HttpOnly 会话 Cookie，提供商认证令牌由服务端加密保存；API 每次验证当前身份，个人记录仍按账号隔离。运行时开关默认 `EMAIL_AUTH_ENABLED=0`，方法为 `magic-link`。部署者按 [邮箱登录设置](docs/EMAIL_LOGIN_SETUP.md) 配置自己的项目、Site URL 和服务端运行值，并验证真实邮件送达后再启用；公开源码不代表任何实例已启用或实际发信已通过。Free 默认 SMTP 仅向项目组织成员邮箱发信，不表示所有邮箱均可登录。邮件链接须在发起请求的同一浏览器打开，日常邮箱登录不需要 GPT 账号。
+
+迁移旧记录需要同时证明原 Sites 账号与邮箱账号，并由用户明确确认。邮箱相同不自动绑定；新账号有独立进度时阻止覆盖，提供双方备份。现有作答、接触次数与复习日期保留，跳过迁移不会删除旧记录。
+
+共享课程与通用词卡的发布权限由服务端运行值 `EDITOR_EMAIL` 指定，仍使用 Sites 网关验证的编辑者身份；访客和普通学习账号不能写入共享教材。不要把真实运行值写进 `.env.example`、源码或公开 GitHub。
 
 ## 本地开发
 
@@ -32,7 +40,7 @@ npm test
 npm run dev
 ```
 
-`npm run dev` 仅监听 loopback，使用模拟登录和本地 SQLite 进行 QA；模拟逻辑不进入生产 Worker。`npm run build` 将前端和 Drizzle 迁移打包到 `.artifact/`。数据库结构在 `db/schema.mjs`，迁移在 `drizzle/`。Drizzle 配置和 schema 使用 `.mjs`，与仓库原 Astro TypeScript 检查保持独立。
+`npm run dev` 仅监听 loopback，使用模拟登录和本地 SQLite 进行 QA；模拟逻辑不进入生产 Worker。`npm run build` 将前端和 Drizzle 迁移打包到 `.artifact/`。数据库结构在 `db/schema.mjs`，迁移在 `drizzle/`。Drizzle 配置和 schema 使用 `.mjs`，与仓库原 Astro TypeScript 检查保持独立。`npm run db:generate` 使用显式配置路径。
 
 浏览器验证脚本可单独运行，先在自己的开发环境安装 Playwright 与 Chromium。测试中的日期、答案和账号均为构造的测试数据。
 
@@ -41,5 +49,3 @@ npm run dev
 发音采用开源 [Free Dictionary API](https://github.com/meetDeveloper/freeDictionaryAPI)，仅把明确标记 UK 的音频作为英式录音，短语可使用英式系统语音。分级采用已有教材分级、学术词表与有说明的英语字幕词频启发式；词表未覆盖的词明确标注待核实。词频派生数据按 CC BY-SA 4.0，来源与限制见 [CLASSIFIER-DATA.md](dist/CLASSIFIER-DATA.md)。
 
 文章原文转载依据在每篇课程的 `article.license` 中；保留来源、署名及授权页链接。教学例句与真实引用分开。新课程必须核实免费全文、日期和转载许可，不虚构文章或成绩。
-
-共享课程和词卡的发布者由 Sites 运行时密钥 `EDITOR_EMAIL` 指定，匹配网关验证的邮箱；配置为空时关闭发布。公开访问也不允许访客写入共享课程。该值不存储在源码或前端。

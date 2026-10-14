@@ -4,6 +4,9 @@
 node_modules/
 __pycache__/
 .env*
+!.env.example
 .openai/*.tmp
 .artifact/
 .wrangler/
+
+!.env.example

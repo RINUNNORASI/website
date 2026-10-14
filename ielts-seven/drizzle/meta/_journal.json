@@ -15,6 +15,20 @@
       "when": 1791967722991,
       "tag": "0001_brown_ben_parker",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1791994695627,
+      "tag": "0002_magical_alice",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1791995916080,
+      "tag": "0003_moaning_gabe_jones",
+      "breakpoints": true
     }
   ]
 }

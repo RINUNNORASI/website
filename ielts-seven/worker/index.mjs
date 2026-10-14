@@ -1,3 +1,4 @@
+import './email-auth.mjs';
 // The build embeds engine.js, sync-state.js, and SITE_ASSETS before this module.
 // Identity headers below are supplied by the Sites gateway, never the client UI.
 const MAX_REQUEST_BYTES = 1024 * 1024;
@@ -5,7 +6,7 @@ const API_HEADERS = {
   'Content-Type': 'application/json; charset=utf-8',
   'Cache-Control': 'private, no-store',
   'X-Content-Type-Options': 'nosniff',
-  'Vary': 'oai-authenticated-user-id',
+  'Vary': 'Cookie, oai-authenticated-user-id',
 };
 
 function json(data, status = 200, extraHeaders = {}) {
@@ -121,7 +122,9 @@ async function readState(db, user) {
 }
 
 async function learningState(request, env) {
-  const user = identity(request);
+  const emailAuth = globalThis.XUNCI_EMAIL_AUTH.config(env)
+    ? await globalThis.XUNCI_EMAIL_AUTH.identity(request, env) : null;
+  const user = emailAuth ? emailAuth.user : identity(request);
   if (!['GET', 'PUT'].includes(request.method)) return json({error: 'method_not_allowed'}, 405, {Allow: 'GET, PUT'});
   if (request.method === 'PUT') sameOrigin(request);
   const db = database(env);
@@ -148,14 +151,32 @@ async function learningState(request, env) {
   const updatedAt = new Date().toISOString();
   let written;
   if (payload.baseRevision === 0) {
-    written = await db.prepare('INSERT INTO learning_state (user_id, revision, payload_json, updated_at) VALUES (?, 1, ?, ?) ON CONFLICT(user_id) DO NOTHING RETURNING revision')
-      .bind(user.id, serialized, updatedAt).first();
+    written = emailAuth
+      ? await db.prepare(`INSERT INTO learning_state (user_id, revision, payload_json, updated_at)
+        SELECT ?, 1, ?, ? WHERE EXISTS (SELECT 1 FROM auth_accounts WHERE provider_subject = ? AND user_id = ?)
+        AND EXISTS (SELECT 1 FROM auth_sessions WHERE session_hash = ? AND expires_at > ?)
+        ON CONFLICT(user_id) DO NOTHING RETURNING revision`)
+        .bind(user.id, serialized, updatedAt, emailAuth.providerSubject, user.id, emailAuth.sessionHash, Date.now()).first()
+      : await db.prepare('INSERT INTO learning_state (user_id, revision, payload_json, updated_at) VALUES (?, 1, ?, ?) ON CONFLICT(user_id) DO NOTHING RETURNING revision')
+        .bind(user.id, serialized, updatedAt).first();
   } else {
-    written = await db.prepare('UPDATE learning_state SET revision = revision + 1, payload_json = ?, updated_at = ? WHERE user_id = ? AND revision = ? RETURNING revision')
-      .bind(serialized, updatedAt, user.id, payload.baseRevision).first();
+    written = emailAuth
+      ? await db.prepare(`UPDATE learning_state SET revision = revision + 1, payload_json = ?, updated_at = ?
+        WHERE user_id = ? AND revision = ?
+        AND EXISTS (SELECT 1 FROM auth_accounts WHERE provider_subject = ? AND user_id = ?)
+        AND EXISTS (SELECT 1 FROM auth_sessions WHERE session_hash = ? AND expires_at > ?) RETURNING revision`)
+        .bind(serialized, updatedAt, user.id, payload.baseRevision, emailAuth.providerSubject, user.id, emailAuth.sessionHash, Date.now()).first()
+      : await db.prepare('UPDATE learning_state SET revision = revision + 1, payload_json = ?, updated_at = ? WHERE user_id = ? AND revision = ? RETURNING revision')
+        .bind(serialized, updatedAt, user.id, payload.baseRevision).first();
   }
   // Insert/update is one atomic SQL statement; a stale writer never overwrites another device.
   if (!written) {
+    if (emailAuth) {
+      const stillAuthorized = await db.prepare(`SELECT user_id FROM auth_accounts WHERE provider_subject = ? AND user_id = ?
+        AND EXISTS (SELECT 1 FROM auth_sessions WHERE session_hash = ? AND expires_at > ?)` )
+        .bind(emailAuth.providerSubject, user.id, emailAuth.sessionHash, Date.now()).first();
+      if (!stillAuthorized) throw new globalThis.XUNCI_EMAIL_AUTH.AuthError(401, 'authentication_required');
+    }
     const snapshot = await readState(db, user);
     return json(snapshot, 409, await stateHeaders(user, snapshot.revision));
   }
@@ -167,7 +188,7 @@ async function learningState(request, env) {
 function canonicalLesson(value, code = 'invalid_lesson') {
   try {
     // validateState first rejects dangerous keys/non-JSON data before the shared lesson validator.
-    const sanitized = globalThis.IELTS_SYNC.validateState({records: [], lastExcel: '2026-10-11',
+    const sanitized = globalThis.IELTS_SYNC.validateState({records: [], lastExcel: globalThis.IELTS_ENGINE.today(),
       readingState: {assignments: {}, results: {}, completed: {}, excluded: []}, customLessons: [value]});
     const lesson = sanitized.customLessons[0];
     if (!globalThis.IELTS_ENGINE.isDate(lesson.learningDate) || !lesson.article) throw new Error('date or passage');
@@ -315,7 +336,8 @@ async function listLessons(db) {
     published: lesson.published, license: lesson.article?.license || null}))};
 }
 
-async function learningSummary(db, user) {
+async function learningSummary(db, user, env) {
+  const auth = globalThis.XUNCI_EMAIL_AUTH.config(env);
   const snapshot = await readState(db, user);
   const E = globalThis.IELTS_ENGINE;
   const state = snapshot.state;
@@ -330,7 +352,7 @@ async function learningSummary(db, user) {
   const reading = state?.readingState || {results: {}, completed: {}};
   const answers = Object.values(reading.results).sort((left, right) => Date.parse(right.submittedAt) - Date.parse(left.submittedAt));
   const latest = answers[0];
-  return {version: 1, hasCloudState: state !== null, revision: snapshot.revision, updatedAt: snapshot.updatedAt, asOfDate,
+  return {version: 1, authentication: {enabled: !!auth, loginMethod: auth?.loginMethod || 'otp'}, hasCloudState: state !== null, revision: snapshot.revision, updatedAt: snapshot.updatedAt, asOfDate,
     pendingWords: records.filter(record => record.needsContent === true).map(record => ({word: record.word,
       level: record.level, source: record.batch || '自主提交', firstSeen: record.firstSeen})),
     vocabulary: {total: records.length, byLevel, byStatus},
@@ -413,7 +435,7 @@ async function mcp(request, env) {
     } else if (rpc.params.name === 'list_reading_lessons') {
       envelope(args, []); result = await listLessons(database(env));
     } else if (rpc.params.name === 'get_learning_summary') {
-      envelope(args, []); result = await learningSummary(database(env), user);
+      envelope(args, []); result = await learningSummary(database(env), user, env);
     } else if (rpc.params.name === 'get_word_cards') {
       envelope(args, []); result = await readWordCards(database(env));
     } else if (rpc.params.name === 'publish_reading_lesson') {
@@ -425,7 +447,8 @@ async function mcp(request, env) {
       const response = await wordCards(editorRequest(request, '/api/word-cards', args), env);
       result = await response.json(); isError = !response.ok;
     } else throw new RequestError(400, 'unknown_tool');
-  } catch (error) { isError = true; result = {error: error instanceof RequestError ? error.code : 'storage_error'}; }
+  } catch (error) { isError = true; result = error instanceof globalThis.XUNCI_EMAIL_AUTH.AuthError
+    ? {error: error.code, status: error.status} : {error: error instanceof RequestError ? error.code : 'storage_error'}; }
   return rpcResult(id, {content: [{type: 'text', text: JSON.stringify(result)}], isError});
 }
 
@@ -497,6 +520,10 @@ export default {
   async fetch(request, env) {
     const pathname = new URL(request.url).pathname;
     try {
+      if (pathname === '/' && request.method === 'GET' && new URL(request.url).searchParams.has('code')) {
+        return await globalThis.XUNCI_EMAIL_AUTH.handleMagicCallback(request, env);
+      }
+      if (pathname.startsWith('/api/auth/')) return await globalThis.XUNCI_EMAIL_AUTH.handle(request, env);
       if (pathname === '/mcp') return await mcp(request, env);
       if (pathname === '/api/learning-state') return await learningState(request, env);
       if (pathname === '/api/lessons') return await dailyLessons(request, env);
@@ -506,6 +533,8 @@ export default {
       if (pathname.startsWith('/api/')) return json({error: 'not_found'}, 404);
       return staticAsset(request, pathname);
     } catch (error) {
+      if (error instanceof globalThis.XUNCI_EMAIL_AUTH.AuthError) return json({error: error.code, ...error.details,
+        ...(error.status === 401 ? {signInPath: '/#settings'} : {})}, error.status);
       if (error instanceof RequestError) return json({error: error.code,
         ...(error.status === 401 ? {signInPath: '/signin-with-chatgpt?return_to=%2F'} : {})}, error.status);
       // Do not log user identity, payloads, SQL contents, or learning answers.

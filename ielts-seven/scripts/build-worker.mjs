@@ -19,10 +19,11 @@ async function collect(dir,prefix=''){
 await collect(path.join(root,'dist'));
 const requirements=await readFile(path.join(root,'docs/DAILY_REQUIREMENTS.md'),'utf8');
 assets['/docs/DAILY_REQUIREMENTS.md']={body:requirements,type:types['.md']};
+assets['/docs/EMAIL_LOGIN_SETUP.md']={body:await readFile(path.join(root,'docs/EMAIL_LOGIN_SETUP.md'),'utf8'),type:types['.md']};
 const context={window:{}};vm.createContext(context);vm.runInContext(assets['/reading-data.js'].body,context);
 const seedLessons=JSON.parse(JSON.stringify(context.window.READING_LESSONS));
-const [engine,sync,backend]=await Promise.all(['dist/engine.js','dist/sync-state.js','worker/index.mjs'].map(f=>readFile(path.join(root,f),'utf8')));
-const code=engine+'\n'+sync+'\nconst SITE_ASSETS='+JSON.stringify(assets)+';\nconst SITE_SEED_LESSONS='+JSON.stringify(seedLessons)+';\n'+backend;
+const [engine,sync,auth,backend]=await Promise.all(['dist/engine.js','dist/sync-state.js','worker/email-auth.mjs','worker/index.mjs'].map(f=>readFile(path.join(root,f),'utf8')));
+const code=engine+'\n'+sync+'\n'+auth+'\nconst SITE_ASSETS='+JSON.stringify(assets)+';\nconst SITE_SEED_LESSONS='+JSON.stringify(seedLessons)+';\n'+backend.replace(/^import '\.\/email-auth\.mjs';\s*/m,'');
 await writeFile(path.join(output,'server/index.js'),code);
 await cp(path.join(root,'.openai/hosting.json'),path.join(output,'.openai/hosting.json'));
 await cp(path.join(root,'drizzle'),path.join(output,'.openai/drizzle'),{recursive:true});
