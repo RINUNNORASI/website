@@ -45,7 +45,7 @@ function provider(t, override) {
   globalThis.fetch = async (url, options = {}) => {
     assert.ok(url.startsWith('https://' + PROJECT + '.supabase.co/auth/v1/'));
     assert.equal(options.headers.apikey, 'sb_publishable_' + 'a'.repeat(32));
-    assert.equal(options.redirect, 'error'); assert.ok(options.signal);
+    assert.equal(options.redirect, 'manual'); assert.ok(options.signal);
     const endpoint = new URL(url).pathname.slice('/auth/v1'.length) + new URL(url).search;
     const body = options.body ? JSON.parse(options.body) : null;
     calls.push({endpoint, method: options.method, body, headers: options.headers});
@@ -143,6 +143,34 @@ test('failed email delivery still consumes cooldown and never leaks provider mes
   const failed = await run(env, 'otp', 'POST', {email: 'alice@example.com'});
   assert.equal(failed.status, 503); assert.equal(await failed.text(), '{"error":"email_delivery_unavailable"}');
   assert.equal((await run(env, 'otp', 'POST', {email: 'alice@example.com'})).status, 429); assert.equal(stub.calls.length, 1);
+});
+
+test('provider redirects fail closed before consuming their body or forwarding credentials', async t => {
+  const db = new FakeD1(); t.after(() => db.close()); const env = environment(db);
+  let bodyReads = 0;
+  const stub = provider(t, () => ({status: 302, ok: false,
+    async json() { bodyReads++; throw new Error('redirect body must not be read'); }}));
+  const failed = await run(env, 'otp', 'POST', {email: 'alice@example.com'});
+  assert.equal(failed.status, 503); assert.deepEqual(await failed.json(), {error: 'auth_provider_unavailable'});
+  assert.equal(stub.calls.length, 1); assert.equal(bodyReads, 0);
+  assert.equal(db.sqlite.prepare('SELECT COUNT(*) n FROM auth_sessions').get().n, 0);
+});
+
+test('read-only provider health reports only transport status without mail or provider details', async t => {
+  const db = new FakeD1(); t.after(() => db.close()); const env = environment(db);
+  let status = 200;
+  const stub = provider(t, endpoint => {
+    assert.equal(endpoint, '/settings');
+    return Response.json({private_provider_details: 'never return this'}, {status});
+  });
+  await handler;
+  assert.deepEqual(await globalThis.XUNCI_EMAIL_AUTH.connectionStatus(env), {status: 'reachable', httpStatus: 200});
+  status = 401;
+  assert.deepEqual(await globalThis.XUNCI_EMAIL_AUTH.connectionStatus(env), {status: 'unavailable', httpStatus: 401});
+  status = 302;
+  assert.deepEqual(await globalThis.XUNCI_EMAIL_AUTH.connectionStatus(env), {status: 'unavailable'});
+  assert.ok(stub.calls.every(call => call.method === 'GET' && call.body === null && !call.headers.Authorization));
+  assert.equal(db.sqlite.prepare('SELECT COUNT(*) n FROM auth_rate_limits').get().n, 0);
 });
 
 test('verification validates trusted confirmed /user identity and only returns an opaque secure cookie', async t => {
@@ -491,4 +519,26 @@ test('native MCP summary safely reports configured email method without credenti
   const invalidRpc = await invalid.json(); assert.equal(invalidRpc.result.isError, true);
   assert.deepEqual(JSON.parse(invalidRpc.result.content[0].text), {error: 'email_auth_misconfigured', status: 503});
   assert.deepEqual(db.sqlite.prepare('SELECT * FROM learning_state').get(), before);
+});
+
+test('only the native editor summary probes real provider connectivity and never changes learning records', async t => {
+  const db = new FakeD1(); t.after(() => db.close());
+  const env = environment(db, {EMAIL_AUTH_METHOD: 'magic-link'});
+  const stub = provider(t, endpoint => endpoint === '/settings' ? Response.json({external: {email: true}}) : null);
+  seedState(db, 'old-account'); const before = db.sqlite.prepare('SELECT * FROM learning_state').get();
+  const call = {jsonrpc: '2.0', id: 'owner-connection', method: 'tools/call', params: {name: 'get_learning_summary', arguments: {}}};
+  const ownerRequest = request('/mcp', 'POST', call, {legacy: 'old-account'});
+  ownerRequest.headers.set('oai-authenticated-user-email', 'editor@example.com');
+  const result = await (await handler).fetch(ownerRequest, env);
+  const rpc = await result.json(); assert.equal(rpc.result.isError, false);
+  const summary = JSON.parse(rpc.result.content[0].text);
+  assert.deepEqual(summary.authentication, {enabled: true, loginMethod: 'magic-link', connection: {status: 'reachable', httpStatus: 200}});
+  assert.equal(stub.calls.length, 1); assert.equal(stub.calls[0].endpoint, '/settings');
+  assert.ok(!JSON.stringify(summary).includes(env.SUPABASE_PUBLISHABLE_KEY));
+  assert.deepEqual(db.sqlite.prepare('SELECT * FROM learning_state').get(), before);
+  ownerRequest.headers.delete('oai-authenticated-user-email');
+  const noEditor = await (await handler).fetch(new Request(ownerRequest, {body: JSON.stringify(call)}), {...env, EDITOR_EMAIL: undefined});
+  const noEditorRpc = await noEditor.json();
+  assert.equal(JSON.parse(noEditorRpc.result.content[0].text).authentication.connection, undefined);
+  assert.equal(stub.calls.length, 1);
 });

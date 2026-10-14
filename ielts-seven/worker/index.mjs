@@ -338,6 +338,11 @@ async function listLessons(db) {
 
 async function learningSummary(db, user, env) {
   const auth = globalThis.XUNCI_EMAIL_AUTH.config(env);
+  const authentication = {enabled: !!auth, loginMethod: auth?.loginMethod || 'otp'};
+  const editorEmail = typeof env?.EDITOR_EMAIL === 'string' ? env.EDITOR_EMAIL.trim().toLowerCase() : '';
+  if (auth && editorEmail && user.email?.trim().toLowerCase() === editorEmail) {
+    authentication.connection = await globalThis.XUNCI_EMAIL_AUTH.connectionStatus(env);
+  }
   const snapshot = await readState(db, user);
   const E = globalThis.IELTS_ENGINE;
   const state = snapshot.state;
@@ -352,7 +357,7 @@ async function learningSummary(db, user, env) {
   const reading = state?.readingState || {results: {}, completed: {}};
   const answers = Object.values(reading.results).sort((left, right) => Date.parse(right.submittedAt) - Date.parse(left.submittedAt));
   const latest = answers[0];
-  return {version: 1, authentication: {enabled: !!auth, loginMethod: auth?.loginMethod || 'otp'}, hasCloudState: state !== null, revision: snapshot.revision, updatedAt: snapshot.updatedAt, asOfDate,
+  return {version: 1, authentication, hasCloudState: state !== null, revision: snapshot.revision, updatedAt: snapshot.updatedAt, asOfDate,
     pendingWords: records.filter(record => record.needsContent === true).map(record => ({word: record.word,
       level: record.level, source: record.batch || '自主提交', firstSeen: record.firstSeen})),
     vocabulary: {total: records.length, byLevel, byStatus},

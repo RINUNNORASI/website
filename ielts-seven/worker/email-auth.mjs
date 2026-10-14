@@ -119,11 +119,22 @@
     if (payload !== undefined) headers['Content-Type'] = 'application/json';
     if (token) headers.Authorization = 'Bearer ' + token;
     try { result = await fetch(cfg.url + '/auth/v1' + path, {method, headers,
-      ...(payload === undefined ? {} : {body: JSON.stringify(payload)}), signal: AbortSignal.timeout(8000), redirect: 'error'}); }
+      ...(payload === undefined ? {} : {body: JSON.stringify(payload)}), signal: AbortSignal.timeout(8000), redirect: 'manual'}); }
     catch (_) { throw new AuthError(503, 'auth_provider_unavailable'); }
+    // Workers only supports follow/manual. Never forward API keys or user tokens through a redirect.
+    if (result.status >= 300 && result.status < 400) throw new AuthError(503, 'auth_provider_unavailable');
     let body = null;
     if (result.status !== 204) try { body = await result.json(); } catch (_) { /* Provider text is never forwarded. */ }
     return {status: result.status, ok: result.ok, body};
+  }
+  async function connectionStatus(env) {
+    const cfg = config(env);
+    if (!cfg) return {status: 'disabled'};
+    try {
+      // A read-only settings request verifies the deployed transport/key without sending email.
+      const result = await provider(cfg, '/settings');
+      return {status: result.ok ? 'reachable' : 'unavailable', httpStatus: result.status};
+    } catch (_) { return {status: 'unavailable'}; }
   }
   async function verifiedUser(cfg, access, expectedEmail) {
     const result = await provider(cfg, '/user', 'GET', undefined, access);
@@ -457,5 +468,5 @@
       return response({error: 'storage_error'}, 500);
     }
   }
-  globalThis.XUNCI_EMAIL_AUTH = {config, handle, handleMagicCallback, identity, AuthError};
+  globalThis.XUNCI_EMAIL_AUTH = {config, connectionStatus, handle, handleMagicCallback, identity, AuthError};
 })();
