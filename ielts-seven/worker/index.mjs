@@ -1,5 +1,5 @@
 // The build embeds engine.js, sync-state.js, and SITE_ASSETS before this module.
-// Identity headers below are supplied by the private Sites gateway, never the client UI.
+// Identity headers below are supplied by the Sites gateway, never the client UI.
 const MAX_REQUEST_BYTES = 1024 * 1024;
 const API_HEADERS = {
   'Content-Type': 'application/json; charset=utf-8',
@@ -21,6 +21,14 @@ function identity(request) {
   if (!id || !id.trim() || id.length > 512) throw new RequestError(401, 'authentication_required');
   const email = request.headers.get('oai-authenticated-user-email');
   return {id, email: email && email.length <= 512 ? email : null};
+}
+
+function requireEditor(request, env) {
+  const user = identity(request);
+  const allowed = typeof env?.EDITOR_EMAIL === 'string' ? env.EDITOR_EMAIL.trim().toLowerCase() : '';
+  if (!allowed) throw new RequestError(503, 'editor_not_configured');
+  if (!user.email || user.email.trim().toLowerCase() !== allowed) throw new RequestError(403, 'editor_required');
+  return user;
 }
 
 function sameOrigin(request, required = true) {
@@ -90,6 +98,14 @@ async function stateTag(user, revision) {
   return '"xunci-' + account + '-' + revision + '"';
 }
 
+async function stateHeaders(user, revision) {
+  const tag = await stateTag(user, revision);
+  // Gateways may weaken HTTP ETags when compressing JSON. The application CAS
+  // token stays stable in this dedicated header because it identifies account
+  // and revision, rather than a byte-for-byte response representation.
+  return {ETag: tag, 'X-Xunci-State-Tag': tag};
+}
+
 async function readState(db, user) {
   const row = await db.prepare('SELECT revision, payload_json, updated_at FROM learning_state WHERE user_id = ?')
     .bind(user.id).first();
@@ -111,7 +127,7 @@ async function learningState(request, env) {
   const db = database(env);
   if (request.method === 'GET') {
     const snapshot = await readState(db, user);
-    return json(snapshot, 200, {ETag: await stateTag(user, snapshot.revision)});
+    return json(snapshot, 200, await stateHeaders(user, snapshot.revision));
   }
 
   const payload = await bodyJSON(request);
@@ -120,7 +136,11 @@ async function learningState(request, env) {
     || payload.baseRevision >= Number.MAX_SAFE_INTEGER) throw new RequestError(400, 'invalid_payload');
   const matchedTag = request.headers.get('If-Match');
   if (!matchedTag) throw new RequestError(428, 'revision_tag_required');
-  if (matchedTag !== await stateTag(user, payload.baseRevision)) {
+  const expectedTag = await stateTag(user, payload.baseRevision);
+  // Compatibility with browsers that saved a transport-weakened ETag. Only
+  // this exact account/revision token, optionally prefixed by W/, is accepted;
+  // wildcards, token lists, other accounts, and other revisions remain invalid.
+  if (matchedTag !== expectedTag && matchedTag !== 'W/' + expectedTag) {
     throw new RequestError(412, 'account_or_revision_tag_mismatch');
   }
   const state = canonicalState(payload.state);
@@ -137,17 +157,17 @@ async function learningState(request, env) {
   // Insert/update is one atomic SQL statement; a stale writer never overwrites another device.
   if (!written) {
     const snapshot = await readState(db, user);
-    return json(snapshot, 409, {ETag: await stateTag(user, snapshot.revision)});
+    return json(snapshot, 409, await stateHeaders(user, snapshot.revision));
   }
   if (written.revision !== payload.baseRevision + 1) throw new RequestError(500, 'storage_error');
   return json({version: 1, user, revision: written.revision, updatedAt, state}, 200,
-    {ETag: await stateTag(user, written.revision)});
+    await stateHeaders(user, written.revision));
 }
 
 function canonicalLesson(value, code = 'invalid_lesson') {
   try {
     // validateState first rejects dangerous keys/non-JSON data before the shared lesson validator.
-    const sanitized = globalThis.IELTS_SYNC.validateState({records: [], lastExcel: globalThis.IELTS_ENGINE.today(),
+    const sanitized = globalThis.IELTS_SYNC.validateState({records: [], lastExcel: '2026-10-11',
       readingState: {assignments: {}, results: {}, completed: {}, excluded: []}, customLessons: [value]});
     const lesson = sanitized.customLessons[0];
     if (!globalThis.IELTS_ENGINE.isDate(lesson.learningDate) || !lesson.article) throw new Error('date or passage');
@@ -173,8 +193,9 @@ async function dailyLessons(request, env) {
     });
     return json({version: 1, lessons});
   }
-  // This route is served only behind the owner-private Sites dispatch boundary.
-  // Dispatch service auth is consumed by the gateway; never add a browser-side token.
+  // Public readers keep their own progress; shared editorial writes require the
+  // configured owner identity, independently of the Site's audience setting.
+  requireEditor(request, env);
   sameOrigin(request, false);
   if (request.headers.get('X-Xunci-Lesson-Writer') !== '1') throw new RequestError(403, 'lesson_writer_required');
   const payload = await bodyJSON(request);
@@ -254,6 +275,7 @@ async function wordCards(request, env) {
   if (!['GET', 'POST'].includes(request.method)) return json({error: 'method_not_allowed'}, 405, {Allow: 'GET, POST'});
   const db = database(env);
   if (request.method === 'GET') return json(await readWordCards(db));
+  requireEditor(request, env);
   sameOrigin(request, false);
   if (request.headers.get('X-Xunci-Lesson-Writer') !== '1') throw new RequestError(403, 'lesson_writer_required');
   const payload = await bodyJSON(request);

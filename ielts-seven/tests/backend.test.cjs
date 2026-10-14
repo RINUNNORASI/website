@@ -58,7 +58,25 @@ function request(method = 'GET', body, options = {}) {
   return new Request(ORIGIN + (options.path || '/api/learning-state'), {method, headers,
     ...(body === undefined ? {} : {body: typeof body === 'string' ? body : JSON.stringify(body)})});
 }
-async function run(db, req) { return (await handler).fetch(req, db ? {DB: db} : {}); }
+async function run(db, req) { return (await handler).fetch(req, db ? {DB: db, EDITOR_EMAIL: 'learner@example.com'} : {}); }
+
+test('public readers and anonymous callers cannot publish shared lessons or word cards', async t => {
+  const db = new FakeD1(); t.after(() => db.close());
+  for (const path of ['/api/lessons', '/api/word-cards']) {
+    const writer = {'X-Xunci-Lesson-Writer': '1'};
+    const anonymous = await run(db, request('POST', {}, {path,
+      headers: {...writer, 'oai-authenticated-user-id': null}}));
+    assert.equal(anonymous.status, 401);
+    const reader = await run(db, request('POST', {}, {path, user: 'another-reader',
+      headers: {...writer, 'oai-authenticated-user-email': 'reader@example.com'}}));
+    assert.equal(reader.status, 403);
+    assert.deepEqual(await reader.json(), {error: 'editor_required'});
+    const unconfigured = await (await handler).fetch(request('POST', {}, {path, headers: writer}), {DB: db});
+    assert.equal(unconfigured.status, 503);
+  }
+  assert.equal(db.sqlite.prepare('SELECT COUNT(*) AS n FROM lessons').get().n, 0);
+  assert.equal(db.sqlite.prepare('SELECT COUNT(*) AS n FROM word_cards').get().n, 0);
+});
 async function tag(db, user = 'account-one', revision = 0) {
   const response = await run(db, request('GET', undefined, {user}));
   const snapshot = await response.json();
@@ -87,6 +105,8 @@ test('first save stores canonical full state and changes the revision without in
   const db = new FakeD1(); t.after(() => db.close());
   const etag = await tag(db);
   assert.match(etag, /^"xunci-[a-f0-9]{24}-0"$/);
+  const initial = await run(db, request());
+  assert.equal(initial.headers.get('X-Xunci-State-Tag'), etag);
   const snapshot = state();
   const response = await run(db, put(0, snapshot, etag));
   assert.equal(response.status, 200);
@@ -101,6 +121,8 @@ test('first save stores canonical full state and changes the revision without in
   const latest = await run(db, request());
   assert.deepEqual(await latest.json(), saved);
   assert.equal(latest.headers.get('ETag'), response.headers.get('ETag'));
+  assert.equal(response.headers.get('X-Xunci-State-Tag'), response.headers.get('ETag'));
+  assert.equal(latest.headers.get('X-Xunci-State-Tag'), response.headers.get('X-Xunci-State-Tag'));
   assert.notEqual(latest.headers.get('ETag'), etag);
 });
 
@@ -120,6 +142,36 @@ test('account isolation and account-bound If-Match prevent cross-account overwri
   const bob = await (await run(db, request('GET', undefined, {user: 'account-two'}))).json();
   assert.equal(alice.state.records[0].word, 'resilience');
   assert.equal(bob.state.records[0].word, 'manage');
+});
+
+test('gateway-weakened transport ETags save while exact account/revision and atomic CAS remain enforced', async t => {
+  const db = new FakeD1(); t.after(() => db.close());
+  const zeroTag = await tag(db);
+  const otherAccountTag = await tag(db, 'account-two');
+  const crossAccount = await run(db, put(0, state(), 'W/' + otherAccountTag));
+  assert.equal(crossAccount.status, 412);
+  for (const invalid of ['*', 'w/' + zeroTag, 'W/ ' + zeroTag, zeroTag + ', W/' + zeroTag]) {
+    assert.equal((await run(db, put(0, state(), invalid))).status, 412);
+  }
+  const saved = await run(db, put(0, state(), 'W/' + zeroTag));
+  assert.equal(saved.status, 200, 'the exact production gateway W/ wrapper is compatible');
+  const oneTag = saved.headers.get('X-Xunci-State-Tag');
+  assert.match(oneTag, /^"xunci-[a-f0-9]{24}-1"$/);
+  assert.equal(oneTag, saved.headers.get('ETag'));
+  const wrongRevision = await run(db, put(1, state(), 'W/' + zeroTag));
+  assert.equal(wrongRevision.status, 412, 'the token revision must match the request baseRevision');
+  const stale = await run(db, put(0, state([word('manage')]), 'W/' + zeroTag));
+  assert.equal(stale.status, 409, 'a valid old token is still rejected by revision CAS');
+  assert.equal(stale.headers.get('X-Xunci-State-Tag'), oneTag);
+  const staleSnapshot = await stale.json();
+  assert.equal(staleSnapshot.revision, 1);
+  assert.equal(staleSnapshot.state.records[0].word, 'resilience');
+  const updated = await run(db, put(1, state([word('manage')]), 'W/' + oneTag));
+  assert.equal(updated.status, 200);
+  assert.ok(updated.headers.get('X-Xunci-State-Tag').endsWith('-2"'));
+  const otherEmpty = await (await run(db, request('GET', undefined, {user: 'account-two'}))).json();
+  assert.equal(otherEmpty.revision, 0);
+  assert.equal(otherEmpty.state, null);
 });
 
 test('concurrent insert and revision CAS reject stale writers and return only their account remote state', async t => {

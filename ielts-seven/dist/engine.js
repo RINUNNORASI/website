@@ -156,6 +156,23 @@
         || LEVELS.indexOf(a.level) - LEVELS.indexOf(b.level)
         || dueDate(a).localeCompare(dueDate(b)) || a.word.localeCompare(b.word));
   }
+  function studyQueue(records, date, preferences, selectedIds) {
+    date = requireDate(date || today());
+    const p = preferences || {}, perSession = p.dailyReviewLimit || 20;
+    const startedToday = records.filter(record => record.reviewHistory?.length
+      && record.reviewHistory.every(event => event.date >= date)
+      && record.reviewHistory.some(event => event.date === date)).length;
+    let newRemaining = Math.max(0, (p.dailyNewLimit || 18) - startedToday);
+    const selected = selectedIds ? new Set(selectedIds) : null;
+    return due(records, date).filter(record => {
+      if (selected && !selected.has(record.id)) return false;
+      if (!(record.reviewHistory || []).length) {
+        if (!newRemaining) return false;
+        newRemaining--;
+      }
+      return true;
+    }).slice(0, perSession);
+  }
   function nextScheduled(record, date) {
     const future = SCHEDULE.map(day => addDays(record.firstSeen, day)).filter(day => day > date);
     return future.length ? future[0] : null;
@@ -395,6 +412,6 @@
     return {allowed, days, newCount, reason: days < 5 ? '距离上次整理未满 5 天，推荐每 7 天整理一次。'
       : newCount < 5 ? '新增词汇少于 5 个，积累足够新增后再整理。' : '可整理 A/B 词库；推荐每 7 天整理一次。'};
   }
-  return {today, isDate, addDays, dayDiff, normalizeWord, seed, mode, hasError, due, dueDate,
+  return {today, isDate, addDays, dayDiff, normalizeWord, seed, mode, hasError, due, dueDate, studyQueue,
     stageIntake, confirmIntake, review, setLevel, validateReadingState, validateBackup, makeBackup, exportEligible, SCHEDULE};
 });

@@ -72,6 +72,23 @@ test('legacy owner records upload to empty cloud with same-origin cookies and op
   h.client.stop();
 });
 
+test('a gateway-weakened ETag cannot replace the dedicated application revision token', async () => {
+  const local = learned(initial());
+  const h = harness({state: local, fetch: async (_, opts) => {
+    const reply = opts.method === 'PUT'
+      ? response(remote(JSON.parse(opts.body).state, 1)) : response(remote(null));
+    const revision = opts.method === 'PUT' ? 1 : 0;
+    reply.headers.get = name => name === 'X-Xunci-State-Tag' ? '"opaque-owner-' + revision + '"'
+      : name === 'ETag' ? 'W/"opaque-owner-' + revision + '"' : null;
+    return reply;
+  }});
+  await h.client.start();
+  assert.equal(h.calls[1].headers['If-Match'], '"opaque-owner-0"');
+  assert.equal(h.client.getStatus().status, 'synced');
+  assert.deepEqual(h.state(), local);
+  h.client.stop();
+});
+
 test('initial cloud records download only when local state is explicitly pristine', async () => {
   const cloud = learned(initial());
   const h = harness({pristine: true, fetch: async () => response(remote(cloud, 4))});

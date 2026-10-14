@@ -32,7 +32,10 @@
       let body;
       try { body = await response.json(); }
       catch (_) { throw new ServiceError('unavailable', '云端返回了无效数据，已保留本机记录。'); }
-      return {status: response.status, body, etag: response.headers?.get('ETag') || null};
+      // The hosting gateway may weaken ETag when compressing JSON. The dedicated
+      // application revision token survives that transport transformation.
+      return {status: response.status, body,
+        etag: response.headers?.get('X-Xunci-State-Tag') || response.headers?.get('ETag') || null};
     } catch (error) {
       if (error instanceof ServiceError) throw error;
       throw new ServiceError('offline', error.name === 'AbortError'
