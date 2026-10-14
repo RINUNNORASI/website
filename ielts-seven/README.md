@@ -32,7 +32,7 @@ npm test
 npm run dev
 ```
 
-`npm run dev` 仅监听 loopback，使用模拟登录和本地 SQLite 进行 QA；模拟逻辑不进入生产 Worker。`npm run build` 将前端和 Drizzle 迁移打包到 `.artifact/`。数据库结构在 `db/schema.ts`，迁移在 `drizzle/`。
+`npm run dev` 仅监听 loopback，使用模拟登录和本地 SQLite 进行 QA；模拟逻辑不进入生产 Worker。`npm run build` 将前端和 Drizzle 迁移打包到 `.artifact/`。数据库结构在 `db/schema.mjs`，迁移在 `drizzle/`。Drizzle 配置和 schema 使用 `.mjs`，与仓库原 Astro TypeScript 检查保持独立。
 
 浏览器验证脚本可单独运行，先在自己的开发环境安装 Playwright 与 Chromium。测试中的日期、答案和账号均为构造的测试数据。
 
