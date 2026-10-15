@@ -1,0 +1,27 @@
+# Copy to render.yaml in the public monorepo after configuring the existing service.
+services:
+  - type: web
+    name: xunci-access-test
+    runtime: node
+    plan: free
+    region: singapore
+    repo: https://github.com/RINUNNORASI/website
+    branch: codex/render-access-test
+    rootDir: ielts-seven
+    buildCommand: node scripts/build-worker.mjs --cloudflare && node scripts/verify-render.mjs
+    startCommand: node scripts/serve-render.mjs
+    healthCheckPath: /health
+    autoDeployTrigger: "off"
+    envVars:
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_PUBLISHABLE_KEY
+        sync: false
+      - key: SESSION_ENCRYPTION_KEY
+        sync: false
+      - key: CLOUDFLARE_ACCOUNT_ID
+        sync: false
+      - key: D1_DATABASE_ID
+        sync: false
+      - key: CLOUDFLARE_D1_API_TOKEN
+        sync: false
