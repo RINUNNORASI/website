@@ -1,0 +1,13 @@
+*.tar.gz
+*.png
+!dist/assets/*.png
+node_modules/
+__pycache__/
+.env*
+!.env.example
+.openai/*.tmp
+.artifact/
+.cloudflare/
+.wrangler/
+.wrangler-cloudflare-*.json
+.dev.vars*
