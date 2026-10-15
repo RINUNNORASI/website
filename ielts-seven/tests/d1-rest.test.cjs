@@ -6,6 +6,134 @@ const config = {accountId: 'a'.repeat(32), databaseId: '12345678-1234-4123-8123-
 const endpoint = `https://api.cloudflare.com/client/v4/accounts/${config.accountId}/d1/database/${config.databaseId}/query`;
 const result = (rows = [], meta = {changes: 0}) => ({success: true, results: rows, meta});
 const response = (results, status = 200) => Response.json({success: true, result: results}, {status});
+const discoveryEnv = {CLOUDFLARE_ACCOUNT_ID: config.accountId, CLOUDFLARE_D1_API_TOKEN: config.apiToken};
+const database = (name = 'xunci-ielts-db', uuid = config.databaseId) => ({name, uuid});
+const discoveryResponse = (rows, info) => Response.json({success: true, result: rows, ...(info === undefined ? {} : {result_info: info})});
+
+test('an explicit database UUID is validated without discovery and an invalid UUID never falls back', async () => {
+  const {resolveD1ConfigFromEnv} = await api;
+  let calls = 0;
+  const fetchImpl = async () => { calls++; throw new Error('must not be called'); };
+  assert.deepEqual(await resolveD1ConfigFromEnv({...discoveryEnv, D1_DATABASE_ID: config.databaseId.toUpperCase()}, {fetchImpl}), config);
+  for (const id of [' ', '../other', null, 7]) {
+    await assert.rejects(resolveD1ConfigFromEnv({...discoveryEnv, D1_DATABASE_ID: id}, {fetchImpl}), {code: 'D1_CONFIG'});
+  }
+  assert.equal(calls, 0);
+});
+
+test('discovery performs a fixed-origin GET and chooses only an exact default or configured database name', async () => {
+  const {resolveD1ConfigFromEnv} = await api;
+  for (const name of ['xunci-ielts-db', 'My_other-db']) {
+    const calls = [];
+    const resolved = await resolveD1ConfigFromEnv({...discoveryEnv, D1_DATABASE_ID: '', ...(name === 'xunci-ielts-db' ? {} : {D1_DATABASE_NAME: name})}, {
+      fetchImpl: async (url, options) => {
+        calls.push({url, options});
+        return discoveryResponse([database(`${name}-backup`), database(name, config.databaseId.toUpperCase()), database(name.toUpperCase() + '_other')]);
+      }
+    });
+    assert.deepEqual(resolved, config);
+    assert.equal(calls.length, 1);
+    const url = new URL(calls[0].url);
+    assert.equal(url.origin, 'https://api.cloudflare.com');
+    assert.equal(url.pathname, `/client/v4/accounts/${config.accountId}/d1/database`);
+    assert.equal(url.searchParams.get('name'), name);
+    assert.equal(url.searchParams.get('per_page'), '100');
+    assert.equal(url.searchParams.get('page'), '1');
+    assert.equal(calls[0].options.method, 'GET');
+    assert.equal(calls[0].options.redirect, 'manual');
+    assert.equal(calls[0].options.headers.Authorization, `Bearer ${config.apiToken}`);
+    assert.equal(calls[0].options.body, undefined);
+  }
+});
+
+test('discovery refuses missing or ambiguous names and invalid matched UUIDs', async () => {
+  const {resolveD1ConfigFromEnv} = await api;
+  for (const [rows, code] of [[[], 'D1_DISCOVERY'], [[database('xunci-ielts-db-backup')], 'D1_DISCOVERY'],
+    [[database(), database()], 'D1_DISCOVERY'], [[database('xunci-ielts-db', '../not-a-uuid')], 'D1_RESPONSE']]) {
+    await assert.rejects(resolveD1ConfigFromEnv(discoveryEnv, {fetchImpl: async () => discoveryResponse(rows)}), {code});
+  }
+});
+
+test('discovery exhausts explicit pagination before accepting a unique match and catches later duplicates', async () => {
+  const {resolveD1ConfigFromEnv} = await api;
+  for (const duplicate of [false, true]) {
+    const pages = [];
+    const fetchImpl = async url => {
+      const page = Number(new URL(url).searchParams.get('page')); pages.push(page);
+      return discoveryResponse([page === 1 || duplicate ? database() : database('other')], {page, per_page: 100, count: 1, total_pages: 2});
+    };
+    if (duplicate) await assert.rejects(resolveD1ConfigFromEnv(discoveryEnv, {fetchImpl}), {code: 'D1_DISCOVERY'});
+    else assert.deepEqual(await resolveD1ConfigFromEnv(discoveryEnv, {fetchImpl}), config);
+    assert.deepEqual(pages, [1, 2]);
+  }
+  const pages = [];
+  assert.deepEqual(await resolveD1ConfigFromEnv(discoveryEnv, {fetchImpl: async url => {
+    const page = Number(new URL(url).searchParams.get('page')); pages.push(page);
+    return discoveryResponse([page === 1 ? database('other') : database()], {page, per_page: 1, count: 1, total_count: 2});
+  }}), config);
+  assert.deepEqual(pages, [1, 2]);
+});
+
+test('discovery checks an additional page when a metadata-free page is full and bounds pagination', async () => {
+  const {resolveD1ConfigFromEnv} = await api;
+  let calls = 0;
+  assert.deepEqual(await resolveD1ConfigFromEnv(discoveryEnv, {fetchImpl: async () => {
+    calls++;
+    return discoveryResponse(calls === 1 ? [database(), ...Array.from({length: 99}, (_, i) => database(`other-${i}`))] : []);
+  }}), config);
+  assert.equal(calls, 2);
+  calls = 0;
+  await assert.rejects(resolveD1ConfigFromEnv(discoveryEnv, {fetchImpl: async () => {
+    calls++; return discoveryResponse([], {page: calls, per_page: 100, count: 0, total_pages: 101});
+  }}), {code: 'D1_DISCOVERY'});
+  assert.equal(calls, 100);
+});
+
+test('discovery validates credentials, names, transport options, and pagination without leaking values', async () => {
+  const {resolveD1ConfigFromEnv} = await api;
+  let calls = 0;
+  const fetchImpl = async () => { calls++; return discoveryResponse([]); };
+  for (const env of [{}, {...discoveryEnv, CLOUDFLARE_ACCOUNT_ID: 'invalid'}, {...discoveryEnv, CLOUDFLARE_D1_API_TOKEN: 'token\nvalue'},
+    {...discoveryEnv, D1_DATABASE_NAME: ''}, {...discoveryEnv, D1_DATABASE_NAME: 'wrong name'}, {...discoveryEnv, D1_DATABASE_NAME: null}]) {
+    await assert.rejects(resolveD1ConfigFromEnv(env, {fetchImpl}), {code: 'D1_CONFIG'});
+  }
+  await assert.rejects(resolveD1ConfigFromEnv(discoveryEnv, {fetchImpl, timeoutMs: 0}), {code: 'D1_CONFIG'});
+  assert.equal(calls, 0);
+  for (const info of [null, {page: 2}, {per_page: 0}, {count: 2}, {total_count: -1}, {total_pages: 1.5}]) {
+    await assert.rejects(resolveD1ConfigFromEnv(discoveryEnv, {fetchImpl: async () => discoveryResponse([database()], info)}), {code: 'D1_RESPONSE'});
+  }
+});
+
+test('discovery rejects redirects, transport and provider failures with sanitized errors', async () => {
+  const {resolveD1ConfigFromEnv} = await api;
+  const cases = [
+    [async () => new Response(config.apiToken, {status: 302, headers: {Location: 'https://other.example'}}), 'D1_HTTP'],
+    [async () => new Response(config.apiToken, {status: 403}), 'D1_HTTP'],
+    [async () => Response.json({success: false, errors: [{message: config.apiToken}]}), 'D1_DISCOVERY'],
+    [async () => new Response(config.apiToken), 'D1_RESPONSE'],
+    [async () => { throw new Error(config.apiToken); }, 'D1_NETWORK']
+  ];
+  for (const [fetchImpl, code] of cases) {
+    await assert.rejects(resolveD1ConfigFromEnv(discoveryEnv, {fetchImpl}), error => error.code === code && !error.message.includes(config.apiToken) && !error.cause);
+  }
+});
+
+test('discovery bounds response size and applies a deadline to both fetch and response streaming', async () => {
+  const {resolveD1ConfigFromEnv} = await api;
+  let cancelled = false;
+  await assert.rejects(resolveD1ConfigFromEnv(discoveryEnv, {fetchImpl: async () => new Response(new ReadableStream({
+    start(controller) { controller.enqueue(new Uint8Array(1024 * 1024 + 1)); }, cancel() { cancelled = true; }
+  }))}), {code: 'D1_RESPONSE'});
+  assert.equal(cancelled, true);
+  for (const bodyStalls of [false, true]) {
+    let signal;
+    await assert.rejects(resolveD1ConfigFromEnv(discoveryEnv, {timeoutMs: 15, fetchImpl: async (_, options) => {
+      signal = options.signal;
+      return bodyStalls ? new Response(new ReadableStream({start() {}})) : new Promise(() => {});
+    }}), {code: 'D1_TIMEOUT'});
+    assert.equal(signal.aborted, true);
+  }
+});
 
 test('fixed-origin prepared statements preserve primitive values and support first/all/run', async () => {
   const {createD1Rest} = await api;

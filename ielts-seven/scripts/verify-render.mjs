@@ -1,7 +1,7 @@
 // Build-time connectivity checks. This never sends a login email or starts HTTP.
 import {resolve} from 'node:path';
 import {pathToFileURL} from 'node:url';
-import {renderConfiguration} from './serve-render.mjs';
+import {resolvedRenderConfiguration} from './serve-render.mjs';
 import {verifyD1Rest, D1VerificationError} from './verify-d1-rest.mjs';
 import {D1RestError} from '../runtime/d1-rest.mjs';
 
@@ -10,10 +10,10 @@ export class RenderVerificationError extends Error {}
 export async function verifyRender({env = process.env, fetchImpl = globalThis.fetch,
   verifyDatabase = verifyD1Rest, log = console.log} = {}) {
   let config;
-  try { config = renderConfiguration(env); }
+  try { config = await resolvedRenderConfiguration(env, {fetchImpl}); }
   catch (error) {
     if (error instanceof D1RestError) throw error;
-    throw new RenderVerificationError('Render settings are missing or invalid. Check the six required variables and the public HTTPS origin.');
+    throw new RenderVerificationError('Render settings are missing or invalid. Check the five required variables and the public HTTPS origin.');
   }
   log('Checking the email authentication service without sending email.');
   let response;
@@ -48,7 +48,7 @@ export async function verifyRender({env = process.env, fetchImpl = globalThis.fe
     throw new RenderVerificationError('Enable the Email provider in the configured Supabase project.');
   }
   log('Email authentication service is reachable and Email is enabled.');
-  await verifyDatabase({env, log});
+  await verifyDatabase({env: {...env, D1_DATABASE_ID: config.database.databaseId}, log});
   log('Render build checks passed. No login email was sent.');
 }
 

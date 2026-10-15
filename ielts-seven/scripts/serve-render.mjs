@@ -1,8 +1,8 @@
 import {pathToFileURL} from 'node:url';
 import {canonicalOriginFromEnv, createNodeServer} from '../runtime/node-http.mjs';
-import {configFromEnv, createD1Rest} from '../runtime/d1-rest.mjs';
+import {configFromEnv, createD1Rest, resolveD1ConfigFromEnv} from '../runtime/d1-rest.mjs';
 
-export function renderConfiguration(env) {
+function coreRenderConfiguration(env) {
   const publicOrigin = canonicalOriginFromEnv(env);
   const required = ['SUPABASE_URL', 'SUPABASE_PUBLISHABLE_KEY', 'SESSION_ENCRYPTION_KEY'];
   const missing = required.filter(name => typeof env[name] !== 'string' || !env[name]);
@@ -20,15 +20,26 @@ export function renderConfiguration(env) {
   if (!/^\d+$/.test(portValue) || Number(portValue) < 1 || Number(portValue) > 65535) {
     throw new Error('PORT must be an integer from 1 to 65535.');
   }
-  return {publicOrigin, port: Number(portValue), database: configFromEnv(env),
+  return {publicOrigin, port: Number(portValue),
     workerEnv: {SUPABASE_URL: env.SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY: env.SUPABASE_PUBLISHABLE_KEY,
       SESSION_ENCRYPTION_KEY: env.SESSION_ENCRYPTION_KEY,
       ...(env.EDITOR_EMAIL ? {EDITOR_EMAIL: env.EDITOR_EMAIL} : {}),
       EMAIL_AUTH_ENABLED: '1', EMAIL_AUTH_METHOD: 'magic-link'}};
 }
 
-export async function startRenderServer({env = process.env, worker, createDB = createD1Rest} = {}) {
-  const config = renderConfiguration(env);
+export function renderConfiguration(env) {
+  return {...coreRenderConfiguration(env), database: configFromEnv(env)};
+}
+
+export async function resolvedRenderConfiguration(env, {fetchImpl = globalThis.fetch} = {}) {
+  // Validate the public origin and email settings before sending any credentialed lookup.
+  const core = coreRenderConfiguration(env);
+  return {...core, database: await resolveD1ConfigFromEnv(env, {fetchImpl})};
+}
+
+export async function startRenderServer({env = process.env, worker, createDB = createD1Rest,
+  fetchImpl = globalThis.fetch} = {}) {
+  const config = await resolvedRenderConfiguration(env, {fetchImpl});
   const application = worker || (await import('../.cloudflare/worker.mjs')).default;
   const server = createNodeServer({worker: application, publicOrigin: config.publicOrigin,
     env: {...config.workerEnv, DB: createDB(config.database)}});

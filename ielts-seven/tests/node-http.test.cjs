@@ -173,6 +173,26 @@ test('Render startup configuration validates required settings before listening 
   }
 });
 
+test('Render resolves the existing database when no ID is supplied and validates auth before lookup', async () => {
+  const {resolvedRenderConfiguration} = await import('../scripts/serve-render.mjs');
+  const env = renderEnvironment();
+  delete env.D1_DATABASE_ID;
+  let calls = 0;
+  const fetchImpl = async (url, options) => {
+    calls++;
+    assert.equal(new URL(url).pathname, `/client/v4/accounts/${env.CLOUDFLARE_ACCOUNT_ID}/d1/database`);
+    assert.equal(options.method, 'GET');
+    return Response.json({success: true, result: [{uuid: '12345678-1234-1234-1234-123456789012', name: 'xunci-ielts-db'}],
+      result_info: {page: 1, per_page: 100, count: 1, total_count: 1, total_pages: 1}});
+  };
+  const config = await resolvedRenderConfiguration(env, {fetchImpl});
+  assert.equal(config.database.databaseId, '12345678-1234-1234-1234-123456789012');
+  assert.equal(config.workerEnv.CLOUDFLARE_D1_API_TOKEN, undefined);
+  assert.equal(calls, 1);
+  await assert.rejects(resolvedRenderConfiguration({...env, SUPABASE_URL: 'invalid'}, {fetchImpl}), /authentication settings/);
+  assert.equal(calls, 1);
+});
+
 test('existing standalone Worker through Node enforces authentication and CSRF without querying D1', async t => {
   const [{default: application}, {createCloudflareWorker}] = await Promise.all([
     import('../worker/index.mjs'), import('../worker/cloudflare-boundary.mjs')]);

@@ -10,7 +10,7 @@
 
 ## 连接完整网站
 
-在同一个 Render 服务的 **Environment** 中配置下列六项。可以通过 **Add from .env** 批量添加；值只写进 Render，不提交到 GitHub。保留原会话密钥。
+在同一个 Render 服务的 **Environment** 中配置下列五项。可以通过 **Add from .env** 批量添加；值只写进 Render，不提交到 GitHub。保留原会话密钥。
 
 | 名称 | 内容 |
 | --- | --- |
@@ -18,10 +18,11 @@
 | `SUPABASE_PUBLISHABLE_KEY` | 同一项目的有效 `sb_publishable_` 密钥 |
 | `SESSION_ENCRYPTION_KEY` | 原 Cloudflare 网站使用的 32 字节 Base64 会话密钥 |
 | `CLOUDFLARE_ACCOUNT_ID` | 原 D1 所属 Cloudflare 账号的 32 位 ID |
-| `D1_DATABASE_ID` | 原 `xunci-ielts-db` 数据库的 ID |
 | `CLOUDFLARE_D1_API_TOKEN` | 专用 API 令牌，仅 Account → D1 → Edit，账号范围限定为上述账号 |
 
-`D1_DATABASE_ID` 只是数据库标识，不是 API 令牌。D1 Edit 是账号级权限；固定数据库 ID 不等于令牌只能访问单个数据库。不要使用拥有额外部署或账号管理权限的令牌。
+无需手动查找 Database ID。服务会在指定账号内按名称 `xunci-ielts-db` 查询已有数据库，只在恰好找到一个有效匹配项时继续。查询不会创建数据库。名称不同时可设置 `D1_DATABASE_NAME`；也可以用可选的 `D1_DATABASE_ID` 明确指定原数据库 UUID，填写无效 ID 时会报错，不会自动改连其他数据库。
+
+D1 Edit 是账号级权限，数据库名称或 ID 不会将令牌权限限制在单个数据库。不要使用拥有额外部署或账号管理权限的令牌。
 
 保存环境变量后，使用以下完整站配置：
 

@@ -21,7 +21,5 @@ services:
         sync: false
       - key: CLOUDFLARE_ACCOUNT_ID
         sync: false
-      - key: D1_DATABASE_ID
-        sync: false
       - key: CLOUDFLARE_D1_API_TOKEN
         sync: false
