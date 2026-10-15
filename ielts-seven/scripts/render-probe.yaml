@@ -1,0 +1,15 @@
+# Copy to the public monorepo root as render.yaml for the connectivity probe.
+# No databases, persistent disks, paid plans, or secrets are required.
+services:
+  - type: web
+    name: xunci-access-test
+    runtime: node
+    plan: free
+    region: singapore
+    repo: https://github.com/RINUNNORASI/website
+    branch: codex/render-access-test
+    rootDir: ielts-seven
+    buildCommand: node --check scripts/render-probe.mjs
+    startCommand: node scripts/render-probe.mjs
+    healthCheckPath: /health
+    autoDeployTrigger: "off"
