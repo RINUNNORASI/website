@@ -1,5 +1,8 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const {DatabaseSync} = require('node:sqlite');
 const api = import('../runtime/d1-rest.mjs');
 const verifier = import('../scripts/verify-d1-rest.mjs');
 const config = {accountId: 'a'.repeat(32), databaseId: '12345678-1234-4123-8123-123456789abc', apiToken: 'private-d1-api-token'};
@@ -288,35 +291,47 @@ test('response and request sizes are bounded, including chunked responses', asyn
 });
 
 function preflightFetch({rollback = true, networkOnFailure = false, cleanupFails = false, returningValid = true,
-  bindingTypes = {integer_type: 'integer', real_type: 'real', null_value: 1, ordered: 1}} = {}) {
+  bindingTypes, integerAffinityValid = true, timestampOrderingValid = true, casIncrementValid = true, staleCasValid = true} = {}) {
   const calls = [], messages = [];
-  let rows = 0;
+  const sqlite = new DatabaseSync(':memory:');
+  const migrations = path.join(__dirname, '../drizzle');
+  for (const file of fs.readdirSync(migrations).filter(name => name.endsWith('.sql')).sort()) {
+    sqlite.exec(fs.readFileSync(path.join(migrations, file), 'utf8'));
+  }
+  const execute = ({sql, params}) => {
+    if (!integerAffinityValid && sql.startsWith('CREATE TABLE')) sql = sql.replace('checked_at INTEGER', 'checked_at TEXT');
+    if (!timestampOrderingValid && sql.startsWith('SELECT checked_at')) sql = sql.replace('AND checked_at > ?', 'AND checked_at < ?');
+    if (sql.startsWith('UPDATE ') && sql.includes('SET revision = revision + 1')) {
+      if (!casIncrementValid) sql = sql.replace('revision = revision + 1', 'revision = revision');
+      if (!staleCasValid) sql = sql.replace('AND revision = ?', 'AND revision <= ? + 1');
+    }
+    let rows = sqlite.prepare(sql).all(...params);
+    if (bindingTypes !== undefined && sql.startsWith('SELECT typeof')) rows = [bindingTypes];
+    if (!returningValid && sql.startsWith('INSERT INTO') && rows[0]) rows[0].amount = '2.5';
+    return result(rows);
+  };
   const fetchImpl = async (_, options) => {
     const body = JSON.parse(options.body); calls.push(body);
-    if (body.batch?.length === 7) return response(body.batch.map(() => result()));
-    if (body.sql?.startsWith('SELECT typeof')) return response([result([bindingTypes])]);
-    if (body.sql?.startsWith('CREATE TABLE')) return response([result()]);
-    if (body.sql?.startsWith('INSERT INTO')) { rows = 1; return response([result([{id: 1, amount: returningValid ? 2.5 : '2.5', optional: null, label: 'first'}])]); }
-    if (body.sql?.startsWith('UPDATE ')) return response([result([{amount: 3.75}])]);
-    if (body.batch?.length === 3) { rows = 2; return response([result(), result([{id: 1, amount: 4.5}]), result([{count: 2}])]); }
-    if (body.batch?.length === 2) {
-      if (networkOnFailure) throw new Error(config.apiToken);
-      if (!rollback) rows = 3;
-      return Response.json({success: false, errors: [{message: 'private SQL constraint details'}]}, {status: 400});
+    if (networkOnFailure && body.batch?.length === 2) throw new Error(config.apiToken);
+    if (cleanupFails && body.sql?.startsWith('DROP TABLE')) throw new Error('private cleanup failure');
+    const batch = Array.isArray(body.batch);
+    if (batch) sqlite.exec('BEGIN');
+    try {
+      const results = (batch ? body.batch : [body]).map(execute);
+      if (batch) sqlite.exec('COMMIT');
+      return response(results);
+    } catch (_) {
+      if (batch) sqlite.exec(rollback ? 'ROLLBACK' : 'COMMIT');
+      return Response.json({success: false, errors: [{message: 'private SQL details'}]}, {status: 400});
     }
-    if (body.sql?.startsWith('SELECT COUNT')) return response([result([{count: rows, uncommitted: rows === 2 ? 0 : 1}])]);
-    if (body.sql?.startsWith('DROP TABLE')) {
-      if (cleanupFails) throw new Error('private cleanup failure');
-      return response([result()]);
-    }
-    throw new Error('Unexpected request');
   };
-  return {fetchImpl, calls, messages};
+  return {fetchImpl, calls, messages, close: () => sqlite.close()};
 }
 
-test('remote preflight uses only a random isolated table and read-only application-schema checks', async () => {
+test('remote preflight uses only a random isolated table and read-only application-schema checks', async t => {
   const {createD1Rest} = await api; const {verifyD1Rest} = await verifier;
   const fixture = preflightFetch();
+  t.after(fixture.close);
   await verifyD1Rest({db: createD1Rest({...config, fetchImpl: fixture.fetchImpl}), log: value => fixture.messages.push(value)});
   assert.equal(fixture.calls[0].batch.length, 7);
   assert.ok(fixture.calls[0].batch.every(query => /^SELECT .+ FROM [a-z_]+ WHERE 0$/.test(query.sql)));
@@ -328,10 +343,11 @@ test('remote preflight uses only a random isolated table and read-only applicati
   assert.ok(fixture.messages.at(-1).includes('passed'));
 });
 
-test('preflight fails deployment on partial batch execution, invalid RETURNING, or network errors and always attempts cleanup', async () => {
+test('preflight fails deployment on partial batch execution, invalid RETURNING, or network errors and always attempts cleanup', async t => {
   const {createD1Rest} = await api; const {verifyD1Rest, D1VerificationError} = await verifier;
   for (const options of [{rollback: false}, {returningValid: false}, {networkOnFailure: true}, {cleanupFails: true}]) {
     const fixture = preflightFetch(options);
+    t.after(fixture.close);
     await assert.rejects(verifyD1Rest({db: createD1Rest({...config, fetchImpl: fixture.fetchImpl}), log: value => fixture.messages.push(value)}), error =>
       error instanceof D1VerificationError && error.code === 'D1_PREFLIGHT' && error.message.startsWith('D1 REST preflight failed')
       && !error.message.includes(config.apiToken) && !error.message.includes('private'));
@@ -340,11 +356,11 @@ test('preflight fails deployment on partial batch execution, invalid RETURNING, 
   }
 });
 
-test('numeric preflight failure logs only allowlisted synthetic diagnostics and never reaches table creation', async () => {
+test('numeric preflight failure logs only allowlisted synthetic diagnostics and never reaches table creation', async t => {
   const {createD1Rest} = await api; const {verifyD1Rest} = await verifier;
   const cases = [
-    [{integer_type: 'real', real_type: 'real', null_value: 1, ordered: 1},
-      {integer_type: 'real', real_type: 'real', null_value: 1, ordered: 1}],
+    [{integer_type: 'text', real_type: 'real', null_value: 1, ordered: 1},
+      {integer_type: 'text', real_type: 'real', null_value: 1, ordered: 1}],
     [{integer_type: config.apiToken, real_type: 'text', null_value: config.apiToken, ordered: '1'},
       {integer_type: 'unexpected', real_type: 'text', null_value: 'unexpected', ordered: 'text-1'}],
     [{integer_type: 'integer', real_type: 'real', null_value: null, ordered: true},
@@ -353,6 +369,7 @@ test('numeric preflight failure logs only allowlisted synthetic diagnostics and 
   ];
   for (const [bindingTypes, expected] of cases) {
     const fixture = preflightFetch({bindingTypes});
+    t.after(fixture.close);
     await assert.rejects(verifyD1Rest({db: createD1Rest({...config, fetchImpl: fixture.fetchImpl}), log: value => fixture.messages.push(value)}),
       error => error.code === 'D1_PREFLIGHT' && error.message === 'D1 REST preflight failed during numeric bindings.');
     const diagnostics = fixture.messages.find(value => value.startsWith('D1 REST preflight: synthetic numeric binding diagnostics '));
@@ -360,5 +377,39 @@ test('numeric preflight failure logs only allowlisted synthetic diagnostics and 
     assert.ok(fixture.messages.every(value => !value.includes(config.apiToken)));
     assert.equal(fixture.calls.some(query => query.sql?.startsWith('CREATE TABLE') || query.sql?.startsWith('DROP TABLE')), false);
     assert.equal(fixture.calls.length, 2);
+  }
+});
+
+test('both INTEGER and REAL integer bindings must pass actual SQLite affinity, ordering, large-revision CAS, and rollback', async t => {
+  const {createD1Rest} = await api; const {verifyD1Rest} = await verifier;
+  for (const integer_type of ['integer', 'real']) {
+    const fixture = preflightFetch({bindingTypes: {integer_type, real_type: 'real', null_value: 1, ordered: 1}});
+    t.after(fixture.close);
+    await verifyD1Rest({db: createD1Rest({...config, fetchImpl: fixture.fetchImpl}), log: value => fixture.messages.push(value)});
+    const insert = fixture.calls.find(query => query.sql?.startsWith('INSERT INTO'));
+    assert.equal(insert.params[4], 1800000000123);
+    assert.equal(insert.params[5], Number.MAX_SAFE_INTEGER - 2);
+    const cas = fixture.calls.filter(query => query.sql?.includes('SET revision = revision + 1'));
+    assert.equal(cas.length, 2);
+    assert.deepEqual(cas[0], cas[1]);
+    assert.ok(fixture.messages.some(value => value.includes('stale-write rejection verified')));
+  }
+});
+
+test('integer affinity, timestamp ordering, revision increment, and stale CAS failures all block deployment and clean up', async t => {
+  const {createD1Rest} = await api; const {verifyD1Rest} = await verifier;
+  const cases = [
+    [{integerAffinityValid: false}, 'integer timestamp and revision affinity'],
+    [{timestampOrderingValid: false}, 'integer timestamp and revision comparisons'],
+    [{casIncrementValid: false}, 'integer revision compare-and-swap'],
+    [{staleCasValid: false}, 'integer revision compare-and-swap']
+  ];
+  for (const [options, phase] of cases) {
+    const fixture = preflightFetch(options);
+    t.after(fixture.close);
+    await assert.rejects(verifyD1Rest({db: createD1Rest({...config, fetchImpl: fixture.fetchImpl}), log: value => fixture.messages.push(value)}),
+      error => error.code === 'D1_PREFLIGHT' && error.message === `D1 REST preflight failed during ${phase}.`);
+    assert.ok(fixture.calls.at(-1).sql.startsWith('DROP TABLE IF EXISTS '));
+    assert.equal(fixture.messages.some(value => value.includes('preflight passed')), false);
   }
 });

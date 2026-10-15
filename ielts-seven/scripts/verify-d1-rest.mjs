@@ -55,7 +55,11 @@ export async function verifyD1Rest({env = process.env, db, log = console.log} = 
     phase = 'numeric bindings';
     const types = await db.prepare('SELECT typeof(?) AS integer_type, typeof(?) AS real_type, ? IS NULL AS null_value, ? < ? AS ordered')
       .bind(7, 2.5, null, 2, 10).first();
-    const numericBindingsValid = types?.integer_type === 'integer' && types.real_type === 'real' && types.null_value === 1 && types.ordered === 1;
+    // The live REST API binds JSON integers as SQLite REAL. Both numeric storage
+    // classes are acceptable here; the isolated table below must still prove
+    // INTEGER affinity, exact large values, comparisons, and optimistic locks.
+    const numericBindingsValid = (types?.integer_type === 'integer' || types?.integer_type === 'real')
+      && types.real_type === 'real' && types.null_value === 1 && types.ordered === 1;
     if (!numericBindingsValid) {
       log(`D1 REST preflight: synthetic numeric binding diagnostics ${JSON.stringify(bindingDiagnostics(types))}`);
     }
@@ -63,15 +67,35 @@ export async function verifyD1Rest({env = process.env, db, log = console.log} = 
 
     phase = 'isolated probe table creation';
     cleanupNeeded = true; // A timed-out CREATE might still have reached D1.
-    await db.prepare(`CREATE TABLE ${quoted} (id INTEGER PRIMARY KEY, amount REAL NOT NULL, optional TEXT, label TEXT NOT NULL UNIQUE)`).run();
+    await db.prepare(`CREATE TABLE ${quoted} (id INTEGER PRIMARY KEY, amount REAL NOT NULL, optional TEXT, label TEXT NOT NULL UNIQUE, checked_at INTEGER NOT NULL DEFAULT 0, revision INTEGER NOT NULL DEFAULT 0)`).run();
     phase = 'numeric comparisons and RETURNING';
-    const inserted = await db.prepare(`INSERT INTO ${quoted} (id, amount, optional, label) VALUES (?, ?, ?, ?) RETURNING id, amount, optional, label`)
-      .bind(1, 2.5, null, 'first').first();
+    const timestamp = 1800000000123, revision = Number.MAX_SAFE_INTEGER - 2;
+    const inserted = await db.prepare(`INSERT INTO ${quoted} (id, amount, optional, label, checked_at, revision) VALUES (?, ?, ?, ?, ?, ?) RETURNING id, amount, optional, label, checked_at, revision, typeof(checked_at) AS checked_at_type, typeof(revision) AS revision_type`)
+      .bind(1, 2.5, null, 'first', timestamp, revision).first();
     ensure(inserted?.id === 1 && inserted.amount === 2.5 && inserted.optional === null && inserted.label === 'first');
     const updated = await db.prepare(`UPDATE ${quoted} SET amount = amount + ? WHERE id = ? AND amount < ? RETURNING amount`)
       .bind(1.25, 1, 3).first();
     ensure(updated?.amount === 3.75);
     log('D1 REST preflight: numeric bindings, comparisons, and RETURNING verified.');
+
+    phase = 'integer timestamp and revision affinity';
+    ensure(inserted.checked_at === timestamp && inserted.revision === revision
+      && inserted.checked_at_type === 'integer' && inserted.revision_type === 'integer');
+    phase = 'integer timestamp and revision comparisons';
+    const compared = await db.prepare(`SELECT checked_at, revision, checked_at > ? AS after_equal, checked_at <= ? AS before_previous FROM ${quoted} WHERE id = ? AND checked_at > ? AND checked_at <= ? AND revision = ?`)
+      .bind(timestamp, timestamp - 1, 1, timestamp - 1, timestamp, revision).first();
+    ensure(compared?.checked_at === timestamp && compared.revision === revision
+      && compared.after_equal === 0 && compared.before_previous === 0);
+
+    phase = 'integer revision compare-and-swap';
+    const conditional = db.prepare(`UPDATE ${quoted} SET revision = revision + 1 WHERE id = ? AND revision = ? AND checked_at > ? AND checked_at <= ? RETURNING revision, checked_at, typeof(revision) AS revision_type`)
+      .bind(1, revision, timestamp - 1, timestamp);
+    const advanced = await conditional.first();
+    ensure(advanced?.revision === revision + 1 && advanced.checked_at === timestamp && advanced.revision_type === 'integer');
+    ensure(await conditional.first() === null);
+    const retained = await db.prepare(`SELECT revision, typeof(revision) AS revision_type FROM ${quoted} WHERE id = ?`).bind(1).first();
+    ensure(retained?.revision === revision + 1 && retained.revision_type === 'integer');
+    log('D1 REST preflight: exact INTEGER timestamp and revision storage, ordering, and stale-write rejection verified.');
 
     phase = 'successful transactional batch';
     const successful = await db.batch([
