@@ -7,12 +7,32 @@
     "test": "node --test tests/*.test.cjs",
     "db:generate": "drizzle-kit generate --config=drizzle.config.mjs",
     "build": "node scripts/build-worker.mjs",
+    "build:cloudflare": "node scripts/build-worker.mjs --cloudflare",
+    "db:migrate:remote": "wrangler d1 migrations apply DB --remote",
+    "deploy": "node scripts/deploy-cloudflare.mjs",
     "dev": "node scripts/dev-server.mjs"
   },
   "dependencies": {
     "drizzle-orm": "^0.45.2"
   },
   "devDependencies": {
-    "drizzle-kit": "^0.31.10"
+    "drizzle-kit": "^0.31.10",
+    "wrangler": "4.151.0"
+  },
+  "cloudflare": {
+    "bindings": {
+      "DB": {
+        "description": "保存个人学习记录与课程的 D1 数据库；保持 Free 方案。"
+      },
+      "SUPABASE_URL": {
+        "description": "已有 Supabase 项目的 HTTPS 地址。"
+      },
+      "SUPABASE_PUBLISHABLE_KEY": {
+        "description": "已有项目的 sb_publishable_ 开头的 Publishable Key。"
+      },
+      "SESSION_ENCRYPTION_KEY": {
+        "description": "32 字节随机值的 Base64 编码，用来加密网站会话。"
+      }
+    }
   }
 }

@@ -1,0 +1,14 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "xunci-ielts",
+  "main": ".cloudflare/worker.mjs",
+  "no_bundle": true,
+  "compatibility_date": "2026-10-15",
+  "workers_dev": true,
+  "preview_urls": false,
+  "keep_vars": true,
+  "build": {"command": "npm run build:cloudflare"},
+  "vars": {"EMAIL_AUTH_ENABLED": "1", "EMAIL_AUTH_METHOD": "magic-link"},
+  "secrets": {"required": ["SUPABASE_URL", "SUPABASE_PUBLISHABLE_KEY", "SESSION_ENCRYPTION_KEY"]},
+  "d1_databases": [{"binding": "DB", "database_name": "xunci-ielts-db", "migrations_dir": "drizzle"}]
+}

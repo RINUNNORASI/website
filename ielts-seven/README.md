@@ -1,5 +1,7 @@
 # 循词 · IELTS 7
 
+独立托管可使用 Cloudflare Workers Free、D1 和已有 Supabase 邮箱登录。完整步骤见 [Cloudflare 部署说明](docs/CLOUDFLARE_SETUP.md)。该目标包含单独的身份验证适配，不依赖 Sites 网关注入的身份。
+
 这个目录是独立雅思学习应用的源码镜像，包含中文词汇教学、间隔复习、机考式阅读练习、学习记录云端同步和每日课程发布接口。
 
 ## 教学内容与学习记录

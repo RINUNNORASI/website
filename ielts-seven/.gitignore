@@ -7,6 +7,7 @@ __pycache__/
 !.env.example
 .openai/*.tmp
 .artifact/
+.cloudflare/
 .wrangler/
-
-!.env.example
+.wrangler-cloudflare-*.json
+.dev.vars*
