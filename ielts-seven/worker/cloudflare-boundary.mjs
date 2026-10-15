@@ -9,6 +9,11 @@ export function createCloudflareWorker(app) {
       if (pathname === '/signin-with-chatgpt' || pathname.startsWith('/signin-with-chatgpt/')) {
         return new Response(null, {status: 303, headers: {Location: '/#settings', 'Cache-Control': 'no-store'}});
       }
+      if ((request.method === 'GET' || request.method === 'HEAD') && (pathname === '/zh' || pathname === '/zh/')) {
+        // The previous site cached a root-to-/zh redirect. A fresh root URL avoids
+        // sending that browser straight back to the retired locale entry point.
+        return new Response(null, {status: 303, headers: {Location: '/?app=ielts#today', 'Cache-Control': 'no-store'}});
+      }
 
       const headers = new Headers(request.headers);
       for (const name of [...headers.keys()]) {

@@ -37,6 +37,41 @@ test('standalone routing blocks MCP discovery and keeps old sign-in links on the
   assert.equal(result.headers.get('Location'), '/#settings');
 });
 
+test('legacy Chinese entry points use an uncached app URL for GET and HEAD without accessing storage', async () => {
+  const app = await worker();
+  let queries = 0;
+  const env = {DB: {prepare() { queries++; throw new Error('Unexpected database access'); }}};
+  for (const endpoint of ['/zh', '/zh/']) {
+    for (const method of ['GET', 'HEAD']) {
+      const result = await app.fetch(request(endpoint + '?return_to=https%3A%2F%2Fevil.example', method), env);
+      assert.equal(result.status, 303);
+      assert.equal(result.headers.get('Location'), '/?app=ielts#today');
+      assert.equal(result.headers.get('Cache-Control'), 'no-store');
+      assert.equal(await result.text(), '');
+    }
+    const posted = await app.fetch(request(endpoint, 'POST', {answer: 'keep'}), env);
+    assert.equal(posted.status, 405);
+    assert.equal(posted.headers.get('Location'), null);
+  }
+  assert.equal(queries, 0);
+});
+
+test('legacy locale aliases do not intercept authentication callbacks or similarly named routes', async () => {
+  const [{createCloudflareWorker}] = await modules;
+  const forwarded = [];
+  const app = createCloudflareWorker({async fetch(incoming) {
+    forwarded.push(incoming.url);
+    return new Response('application response', {status: 202});
+  }});
+  const endpoints = ['/?code=standalone-authorization-code', '/api/auth/session', '/api/auth/otp', '/callback', '/zh/callback', '/zhelper'];
+  for (const endpoint of endpoints) {
+    const result = await app.fetch(request(endpoint), {});
+    assert.equal(result.status, 202);
+    assert.equal(result.headers.get('Location'), null);
+  }
+  assert.deepEqual(forwarded, endpoints.map(endpoint => ORIGIN + endpoint));
+});
+
 test('standalone boundary preserves request content and bindings without accepting gateway identities', async () => {
   const [{createCloudflareWorker}] = await modules;
   const binding = {};

@@ -106,6 +106,15 @@ test('a thrown lookup failure is sanitized and cannot trigger database creation'
   assert.equal(calls.length, 1);
 });
 
+test('provider authorization failures give a fixed D1 permission hint without exposing CLI output', async t => {
+  const options = await fixture(t); const {deployCloudflare} = await api; let commands = 0;
+  await assert.rejects(deployCloudflare({...options, env: {}, log() {}, run: async () => {
+    commands++;
+    return {code: 1, stdout: '', stderr: 'Authentication error [code: 10000] ' + secrets.SUPABASE_PUBLISHABLE_KEY};
+  }}), error => /Account > D1 > Edit/.test(error.message) && !error.message.includes(secrets.SUPABASE_PUBLISHABLE_KEY));
+  assert.equal(commands, 1);
+});
+
 test('partial, blank, and invalid supplied secrets fail before database commands', async t => {
   const {deployCloudflare} = await api;
   for (const env of [{SUPABASE_URL: secrets.SUPABASE_URL}, {...secrets, SESSION_ENCRYPTION_KEY: ''},

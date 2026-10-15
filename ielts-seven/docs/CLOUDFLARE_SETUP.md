@@ -29,6 +29,16 @@
 
 点击部署后，脚本按顺序执行：读取现有 D1 清单 → 必要时创建 `xunci-ielts-db` → 执行追加迁移 → 构建并发布 Worker。数据库查询失败时停止；迁移失败时不会发布新程序。后续部署复用已有数据库。这个过程不删除已有数据库，也不修改旧站。
 
+### 构建令牌的数据库权限
+
+Cloudflare 自动生成的 Workers Builds API token 默认权限可能不包含 D1。请在 **Settings → Build** 查看使用的 API token 名称，再到个人菜单 **My Profile → API Tokens** 编辑同名令牌，在保留现有权限的基础上增加 **Account → D1 → Edit**，账号范围保持自己的当前账号。保存同一令牌即可继续使用；令牌值不需要写进网站源代码。
+
+### 出现另一个网站、`/zh/` 页面或克隆阶段找不到目录
+
+`website` 仓库根目录还有一个独立网站。本项目的 Cloudflare 构建必须同时使用生产分支 `cloudflare-deploy` 和根目录 `ielts-seven`。在 **Settings → Build** 检查并保存这两项，以及上表的 Build command 和 Deploy command。更改分支后应从新分支开始一次新构建，旧部署对应的提交可能不含雅思子目录。
+
+新的独立 Worker 会把旧的 `/zh`、`/zh/` 页面地址转到雅思工作台根页面。如果浏览器记住了之前网站的首页跳转，使用部署完成后的根地址打开。
+
 部署成功后，Cloudflare 提供形如 `https://xunci-ielts.<账号子域>.workers.dev` 的地址。新地址以 Cloudflare 实际返回的结果为准。
 
 ## 允许新网址接收登录链接

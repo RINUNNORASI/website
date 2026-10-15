@@ -81,7 +81,12 @@ export async function deployCloudflare({cwd = PROJECT_ROOT, env = process.env, r
     catch { throw new DeploymentError(`Cloudflare ${label} failed. Check the account access and deployment configuration.`); }
     if (!result || result.code !== 0) {
       const status = Number.isInteger(result?.code) ? ` (Wrangler exit code ${result.code})` : '';
-      throw new DeploymentError(`Cloudflare ${label} failed${status}. Check the account access and deployment configuration.`);
+      const permissionFailure = /\[code:\s*10000\]|authentication error|permission denied|forbidden|not authorized/i
+        .test((result?.stdout || '') + '\n' + (result?.stderr || ''));
+      const hint = permissionFailure
+        ? ' Check that the build API token is valid and has Account > D1 > Edit for this account.'
+        : ' Check the account access and deployment configuration.';
+      throw new DeploymentError(`Cloudflare ${label} failed${status}.${hint}`);
     }
     return result.stdout;
   };
