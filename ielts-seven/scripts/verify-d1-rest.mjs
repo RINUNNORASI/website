@@ -27,6 +27,20 @@ function ensure(condition) {
   if (!condition) throw new Error('Unsupported D1 REST semantics.');
 }
 
+function bindingDiagnostics(row) {
+  // Only describe outputs of the constant synthetic SELECT. In particular, do
+  // not stringify an unexpected provider value, which could contain raw data.
+  const sqlType = value => ['integer', 'real', 'text', 'blob', 'null'].includes(value)
+    ? value : value === undefined ? 'missing' : 'unexpected';
+  const flag = value => value === 0 || value === 1 ? value
+    : value === '0' || value === '1' ? `text-${value}`
+    : value === null ? 'null'
+    : value === undefined ? 'missing'
+    : typeof value === 'boolean' ? `boolean-${value}` : 'unexpected';
+  return {integer_type: sqlType(row?.integer_type), real_type: sqlType(row?.real_type),
+    null_value: flag(row?.null_value), ordered: flag(row?.ordered)};
+}
+
 export async function verifyD1Rest({env = process.env, db, log = console.log} = {}) {
   db ??= createD1Rest(configFromEnv(env));
   const table = '__xunci_render_probe_' + randomUUID().replaceAll('-', '');
@@ -41,7 +55,11 @@ export async function verifyD1Rest({env = process.env, db, log = console.log} = 
     phase = 'numeric bindings';
     const types = await db.prepare('SELECT typeof(?) AS integer_type, typeof(?) AS real_type, ? IS NULL AS null_value, ? < ? AS ordered')
       .bind(7, 2.5, null, 2, 10).first();
-    ensure(types?.integer_type === 'integer' && types.real_type === 'real' && types.null_value === 1 && types.ordered === 1);
+    const numericBindingsValid = types?.integer_type === 'integer' && types.real_type === 'real' && types.null_value === 1 && types.ordered === 1;
+    if (!numericBindingsValid) {
+      log(`D1 REST preflight: synthetic numeric binding diagnostics ${JSON.stringify(bindingDiagnostics(types))}`);
+    }
+    ensure(numericBindingsValid);
 
     phase = 'isolated probe table creation';
     cleanupNeeded = true; // A timed-out CREATE might still have reached D1.

@@ -287,13 +287,14 @@ test('response and request sizes are bounded, including chunked responses', asyn
   assert.equal(sent, false);
 });
 
-function preflightFetch({rollback = true, networkOnFailure = false, cleanupFails = false, returningValid = true} = {}) {
+function preflightFetch({rollback = true, networkOnFailure = false, cleanupFails = false, returningValid = true,
+  bindingTypes = {integer_type: 'integer', real_type: 'real', null_value: 1, ordered: 1}} = {}) {
   const calls = [], messages = [];
   let rows = 0;
   const fetchImpl = async (_, options) => {
     const body = JSON.parse(options.body); calls.push(body);
     if (body.batch?.length === 7) return response(body.batch.map(() => result()));
-    if (body.sql?.startsWith('SELECT typeof')) return response([result([{integer_type: 'integer', real_type: 'real', null_value: 1, ordered: 1}])]);
+    if (body.sql?.startsWith('SELECT typeof')) return response([result([bindingTypes])]);
     if (body.sql?.startsWith('CREATE TABLE')) return response([result()]);
     if (body.sql?.startsWith('INSERT INTO')) { rows = 1; return response([result([{id: 1, amount: returningValid ? 2.5 : '2.5', optional: null, label: 'first'}])]); }
     if (body.sql?.startsWith('UPDATE ')) return response([result([{amount: 3.75}])]);
@@ -336,5 +337,28 @@ test('preflight fails deployment on partial batch execution, invalid RETURNING, 
       && !error.message.includes(config.apiToken) && !error.message.includes('private'));
     assert.ok(fixture.calls.at(-1).sql.startsWith('DROP TABLE IF EXISTS '));
     assert.equal(fixture.messages.some(value => value.includes('preflight passed')), false);
+  }
+});
+
+test('numeric preflight failure logs only allowlisted synthetic diagnostics and never reaches table creation', async () => {
+  const {createD1Rest} = await api; const {verifyD1Rest} = await verifier;
+  const cases = [
+    [{integer_type: 'real', real_type: 'real', null_value: 1, ordered: 1},
+      {integer_type: 'real', real_type: 'real', null_value: 1, ordered: 1}],
+    [{integer_type: config.apiToken, real_type: 'text', null_value: config.apiToken, ordered: '1'},
+      {integer_type: 'unexpected', real_type: 'text', null_value: 'unexpected', ordered: 'text-1'}],
+    [{integer_type: 'integer', real_type: 'real', null_value: null, ordered: true},
+      {integer_type: 'integer', real_type: 'real', null_value: 'null', ordered: 'boolean-true'}],
+    [{}, {integer_type: 'missing', real_type: 'missing', null_value: 'missing', ordered: 'missing'}]
+  ];
+  for (const [bindingTypes, expected] of cases) {
+    const fixture = preflightFetch({bindingTypes});
+    await assert.rejects(verifyD1Rest({db: createD1Rest({...config, fetchImpl: fixture.fetchImpl}), log: value => fixture.messages.push(value)}),
+      error => error.code === 'D1_PREFLIGHT' && error.message === 'D1 REST preflight failed during numeric bindings.');
+    const diagnostics = fixture.messages.find(value => value.startsWith('D1 REST preflight: synthetic numeric binding diagnostics '));
+    assert.deepEqual(JSON.parse(diagnostics.slice(diagnostics.indexOf('{'))), expected);
+    assert.ok(fixture.messages.every(value => !value.includes(config.apiToken)));
+    assert.equal(fixture.calls.some(query => query.sql?.startsWith('CREATE TABLE') || query.sql?.startsWith('DROP TABLE')), false);
+    assert.equal(fixture.calls.length, 2);
   }
 });
