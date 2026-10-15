@@ -26,9 +26,60 @@
   const copy = value => JSON.parse(JSON.stringify(value));
   const validEmail = value => typeof value === 'string' && value.length <= 254 && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
   const recordCount = value => Number.isInteger(value) && value >= 0 ? value : 0;
+  const CALLBACK_REASONS = new Set(['invalid_callback', 'browser_cookie_missing', 'pending_unavailable',
+    'verifier_invalid', 'provider_exchange_error', 'identity_verification_failed', 'session_storage_failed',
+    'auth_configuration_error', 'link_expired']);
+  const CALLBACK_FIELDS = ['email-login', 'email-login-reason', 'code', 'error', 'error_code', 'error_description',
+    'access_token', 'refresh_token', 'token', 'token_hash', 'token_type', 'expires_at', 'expires_in',
+    'provider_token', 'provider_refresh_token'];
+
+  function safeCallback(value) {
+    if (!value || (value.status !== 'success' && value.status !== 'error')) return null;
+    return {status: value.status, reason: CALLBACK_REASONS.has(value.reason) ? value.reason : ''};
+  }
+  function consumeCallback() {
+    if (!root.location || !root.history || !root.URL || !root.URLSearchParams) return null;
+    try {
+      const url = new root.URL(root.location.href);
+      const fragment = new root.URLSearchParams(url.hash.slice(1));
+      const queryCallback = CALLBACK_FIELDS.some(key => url.searchParams.has(key));
+      const fragmentCallback = CALLBACK_FIELDS.some(key => fragment.has(key));
+      if (!queryCallback && !fragmentCallback) return null;
+      const queryFailure = CALLBACK_FIELDS.some(key => key !== 'email-login' && key !== 'email-login-reason'
+        && url.searchParams.has(key));
+      const error = url.searchParams.get('email-login') !== 'success' || queryFailure || fragmentCallback;
+      const reason = url.searchParams.get('email-login-reason');
+      const providerExpired = [url.searchParams.get('error_code'), fragment.get('error_code')].includes('otp_expired');
+      const result = safeCallback({status: error ? 'error' : 'success',
+        reason: CALLBACK_REASONS.has(reason) ? reason : providerExpired ? 'link_expired' : ''});
+      for (const key of CALLBACK_FIELDS) url.searchParams.delete(key);
+      // Provider fragments can contain credentials and arbitrary text. Retain none of that fragment.
+      if (fragmentCallback || (queryCallback && url.hash && !/^#(?:today|review|reading|library|plan|settings)$/.test(url.hash))) {
+        url.hash = '#settings';
+      }
+      root.history.replaceState(null, '', url.pathname + url.search + url.hash);
+      return result;
+    } catch (_) { return null; }
+  }
+  function callbackMessage(reason) {
+    if (reason === 'browser_cookie_missing') {
+      return '没有找到发起登录时的浏览器记录。请回到原浏览器重新发送邮件，并在同一浏览器打开最新链接；不要使用邮箱内置浏览器或无痕窗口。';
+    }
+    if (reason === 'session_unavailable') {
+      return '邮箱验证后未能保持登录状态。请允许此网站使用 Cookie，然后在同一浏览器重新发送邮件并打开最新登录链接。';
+    }
+    if (['invalid_callback', 'pending_unavailable', 'verifier_invalid', 'link_expired'].includes(reason)) {
+      return '登录链接已过期、已使用，或已被较新的邮件替代。请在这里重新发送邮件，只打开最新一封邮件中的链接。';
+    }
+    if (['provider_exchange_error', 'identity_verification_failed', 'session_storage_failed', 'auth_configuration_error'].includes(reason)) {
+      return '邮箱登录暂时未完成。请稍后重新发送登录邮件；如果仍无法登录，请联系网站管理员。';
+    }
+    return '这次邮箱登录未完成。请在发起登录的浏览器中重新发送邮件，并打开最新一封邮件中的链接。';
+  }
 
   function create(options) {
     options = options || {};
+    const callbackResult = safeCallback(options.callbackResult === undefined ? consumeCallback() : options.callbackResult);
     let state = {status: 'loading', enabled: false, authenticated: false, user: null, loginMethod: 'otp', sessionStartedAt: null,
       migration: copy(EMPTY_MIGRATION), message: '', busy: false};
     let dialog, phase = 'email', email = '', token = '', message = '', messageKind = '', initialized = false;
@@ -265,6 +316,10 @@
           '<div class="email-auth-code-actions"><button id="email-auth-resend" type="button" class="email-auth-text" data-auth-action="resend">重新获取验证码</button>' +
           '<button type="button" class="email-auth-text" data-auth-action="change-email"' + disabled + '>更换邮箱</button></div>';
       } else {
+        if (phase === 'callback-error') {
+          title = '登录尚未完成';
+          intro = '请按下方提示重新登录。本机学习记录已保留。';
+        }
         content = '<form data-auth-form="email"><label class="email-auth-field" for="email-auth-email">邮箱地址</label>' +
           '<input id="email-auth-email" name="email" type="email" autocomplete="email" maxlength="254" required placeholder="name@example.com"' +
           ' value="' + escape(email) + '"' + disabled + '>' +
@@ -275,14 +330,14 @@
         '<h2 id="email-auth-title" tabindex="-1">' + title + '</h2><p>' + intro + '</p></div>' + content +
         '<p id="email-auth-message" class="email-auth-message ' + (messageKind === 'success' ? 'success' : '') + '" role="status" aria-live="polite">' + escape(message) + '</p>';
       updateButtons();
-      if (phase === 'code' || phase === 'email' || phase === 'link-sent') countdownTimer = root.setInterval(updateButtons, 1000);
+      if (phase === 'code' || phase === 'email' || phase === 'callback-error' || phase === 'link-sent') countdownTimer = root.setInterval(updateButtons, 1000);
       if (phase === 'link-sent') startLinkPoll();
     }
     function show(nextPhase) {
       phase = nextPhase || phase;
       render();
       if (!dialog.open) dialog.showModal();
-      const target = dialog.querySelector(phase === 'code' ? '#email-auth-code' : phase === 'email' ? '#email-auth-email' : '#email-auth-title');
+      const target = dialog.querySelector(phase === 'code' ? '#email-auth-code' : phase === 'email' || phase === 'callback-error' ? '#email-auth-email' : '#email-auth-title');
       if (target && typeof target.focus === 'function') target.focus();
     }
     async function close() {
@@ -359,6 +414,13 @@
             show('migration');
             return await awaitMigration();
           }
+          if (callbackResult && (callbackResult.status === 'error' || !state.authenticated)) {
+            await beforeChange('login');
+            showMessage(callbackMessage(callbackResult.status === 'success' ? 'session_unavailable' : callbackResult.reason));
+            notify('callback-error', message);
+            show('callback-error');
+            return copy(state);
+          }
           notify(state.authenticated ? 'signed-in' : 'signed-out');
           return copy(state);
         } catch (error) {
@@ -369,7 +431,7 @@
       return initTask;
     }
     async function open() {
-      if (state.busy || (dialog && dialog.open && ['email', 'code', 'link-sent', 'migration', 'skip-confirm'].includes(phase))) return;
+      if (state.busy || (dialog && dialog.open && ['email', 'callback-error', 'code', 'link-sent', 'migration', 'skip-confirm'].includes(phase))) return;
       const wasInitialized = initialized;
       if (!initialized) {
         try {await init();} catch (error) {showMessage(error.message); show('error'); return;}
@@ -535,5 +597,5 @@
     return {init, open, getStatus: () => copy(state), logout};
   }
 
-  root.IELTS_AUTH = {create};
+  root.IELTS_AUTH = {create, consumeCallback};
 })(typeof window !== 'undefined' ? window : globalThis);

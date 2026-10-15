@@ -408,6 +408,13 @@ async function beginMagic(env, options = {}) {
   return {cookie: result.headers.get('Set-Cookie').split(';')[0], result};
 }
 const MAGIC_CALLBACK = '/?code=magic-auth-code-abcdef0123456789';
+function failedMagicLocation(reason) { return '/?email-login=expired&email-login-reason=' + reason + '#settings'; }
+function callbackLogs(t) {
+  const previous = console.warn; const entries = [];
+  console.warn = (...args) => { entries.push(args); };
+  t.after(() => { console.warn = previous; });
+  return entries;
+}
 
 test('magic links send a hashed PKCE challenge and retain only an encrypted browser-bound verifier', async t => {
   const db = new FakeD1(); t.after(() => db.close()); const env = environment(db, {EMAIL_AUTH_METHOD: 'magic-link'}); const stub = magicProvider(t);
@@ -441,7 +448,7 @@ test('root magic callback exchanges PKCE on the server, validates /user, issues 
   assert.equal((await session.json()).user.email, 'alice@example.com');
   assert.equal(db.sqlite.prepare('SELECT COUNT(*) n FROM auth_pending_logins').get().n, 0);
   const repeated = await run(env, MAGIC_CALLBACK, 'GET', undefined, {cookie: begun.cookie});
-  assert.equal(repeated.headers.get('Location'), '/?email-login=expired#settings'); assert.equal(stub.exchanges.length, 1);
+  assert.equal(repeated.headers.get('Location'), failedMagicLocation('pending_unavailable')); assert.equal(stub.exchanges.length, 1);
   assert.equal(db.sqlite.prepare('SELECT COUNT(*) n FROM auth_sessions').get().n, 1);
 });
 
@@ -458,7 +465,9 @@ test('missing, expired, duplicate or tampered login verifiers reject callbacks b
       if (scenario === 'duplicate-code') endpoint += '&code=magic-auth-code-abcdef0123456789';
       if (scenario === 'extra-param') endpoint += '&redirect_to=https://evil.example';
       const callback = await run(env, endpoint, 'GET', undefined, options);
-      assert.equal(callback.status, 303); assert.equal(callback.headers.get('Location'), '/?email-login=expired#settings');
+      const reason = ['missing', 'duplicate-cookie'].includes(scenario) ? 'browser_cookie_missing'
+        : scenario === 'expired' ? 'pending_unavailable' : scenario === 'tampered' ? 'verifier_invalid' : 'invalid_callback';
+      assert.equal(callback.status, 303); assert.equal(callback.headers.get('Location'), failedMagicLocation(reason));
       assert.equal(stub.exchanges.length, 0); assert.equal(db.sqlite.prepare('SELECT COUNT(*) n FROM auth_sessions').get().n, 0);
       assert.equal(callback.headers.getSetCookie().length, 1);
     });
@@ -471,11 +480,78 @@ test('PKCE mismatch and provider-substituted email consume the pending link with
     await t.test(scenario, async subtest => {
       const stub = magicProvider(subtest, {[scenario]: true}); const begun = await beginMagic(env);
       const callback = await run(env, MAGIC_CALLBACK, 'GET', undefined, {cookie: begun.cookie});
-      assert.equal(callback.headers.get('Location'), '/?email-login=expired#settings'); assert.equal(stub.exchanges.length, 1);
+      assert.equal(callback.headers.get('Location'), failedMagicLocation(scenario === 'exchangeFailure'
+        ? 'provider_exchange_error' : 'identity_verification_failed')); assert.equal(stub.exchanges.length, 1);
       assert.equal(db.sqlite.prepare('SELECT COUNT(*) n FROM auth_sessions').get().n, 0);
       assert.equal(db.sqlite.prepare('SELECT COUNT(*) n FROM auth_pending_logins').get().n, 0);
     });
   }
+});
+
+test('magic callback diagnostics contain only fixed reasons and optional HTTP status', async t => {
+  const privateMarker = 'private-provider-code-cookie-email-sql@example.com';
+  const cases = [
+    {name: 'disabled', expected: 'auth_configuration_error', overrides: {EMAIL_AUTH_ENABLED: '0'}},
+    {name: 'misconfigured', expected: 'auth_configuration_error', overrides: {SESSION_ENCRYPTION_KEY: privateMarker}},
+    {name: 'untrusted-reason', expected: 'invalid_callback', endpoint: MAGIC_CALLBACK + '&email-login-reason=' + privateMarker},
+    {name: 'missing-cookie', expected: 'browser_cookie_missing', noCookie: true},
+    {name: 'claim-storage', expected: 'session_storage_failed', failSQL: /^UPDATE auth_pending_logins SET claimed_at/},
+    {name: 'missing-pending', expected: 'pending_unavailable', missingPending: true},
+    {name: 'invalid-verifier', expected: 'verifier_invalid', invalidVerifier: true},
+    {name: 'provider-exchange', expected: 'provider_exchange_error', exchangeFailure: true, httpStatus: 400},
+    {name: 'identity', expected: 'identity_verification_failed', wrongEmail: true},
+    {name: 'session-storage', expected: 'session_storage_failed', failSQL: /^INSERT INTO auth_sessions/},
+  ];
+  for (const scenario of cases) await t.test(scenario.name, async subtest => {
+    const db = new FakeD1(); subtest.after(() => db.close());
+    const env = environment(db, {EMAIL_AUTH_METHOD: 'magic-link'});
+    magicProvider(subtest, scenario);
+    const begun = await beginMagic(env);
+    if (scenario.missingPending) db.sqlite.exec('DELETE FROM auth_pending_logins');
+    if (scenario.invalidVerifier) db.sqlite.prepare('UPDATE auth_pending_logins SET verifier_ciphertext = ?').run(privateMarker);
+    const originalPrepare = db.prepare.bind(db);
+    if (scenario.failSQL) db.prepare = sql => {
+      if (scenario.failSQL.test(sql)) throw new Error(privateMarker + ' SELECT secret_sql');
+      return originalPrepare(sql);
+    };
+    const logs = callbackLogs(subtest);
+    const callback = await run({...env, ...scenario.overrides}, scenario.endpoint || MAGIC_CALLBACK, 'GET', undefined,
+      scenario.noCookie ? {} : {cookie: begun.cookie});
+    assert.equal(callback.headers.get('Location'), failedMagicLocation(scenario.expected));
+    assert.deepEqual(logs, [[JSON.stringify({event: 'email_magic_callback', outcome: 'failed', reason: scenario.expected,
+      ...(scenario.httpStatus ? {httpStatus: scenario.httpStatus} : {})})]]);
+    assert.ok(!JSON.stringify(logs).includes(privateMarker));
+    assert.ok(!callback.headers.get('Location').includes(privateMarker));
+    assert.ok(!JSON.stringify(logs).includes(MAGIC_CALLBACK));
+    assert.ok(!JSON.stringify(logs).includes(begun.cookie));
+    assert.equal(db.sqlite.prepare('SELECT COUNT(*) n FROM auth_sessions').get().n, 0);
+  });
+});
+
+test('consumed pending-login cleanup failure still delivers the verified session and prevents replay', async t => {
+  const db = new FakeD1(); t.after(() => db.close());
+  const env = environment(db, {EMAIL_AUTH_METHOD: 'magic-link'}); const stub = magicProvider(t);
+  const begun = await beginMagic(env); const logs = callbackLogs(t);
+  const originalPrepare = db.prepare.bind(db);
+  db.prepare = sql => {
+    if (sql === 'DELETE FROM auth_pending_logins WHERE login_hash = ?') {
+      throw new Error('private cleanup exception containing code, cookie, SQL, and email alice@example.com');
+    }
+    return originalPrepare(sql);
+  };
+  const callback = await run(env, MAGIC_CALLBACK, 'GET', undefined, {cookie: begun.cookie});
+  assert.equal(callback.status, 303);
+  assert.equal(callback.headers.get('Location'), '/?email-login=success#settings');
+  assert.deepEqual(logs, [['email_magic_callback pending_cleanup_deferred']]);
+  const cookies = callback.headers.getSetCookie(); assert.equal(cookies.length, 2);
+  const sessionCookie = cookies.find(value => value.startsWith('__Host-xunci-session='));
+  assert.ok(sessionCookie.includes('HttpOnly; Secure; SameSite=Lax'));
+  assert.equal((await (await run(env, 'session', 'GET', undefined, {cookie: sessionCookie.split(';')[0]})).json()).authenticated, true);
+  assert.ok(db.sqlite.prepare('SELECT claimed_at FROM auth_pending_logins').get().claimed_at > 0);
+  const repeated = await run(env, MAGIC_CALLBACK, 'GET', undefined, {cookie: begun.cookie});
+  assert.equal(repeated.headers.get('Location'), failedMagicLocation('pending_unavailable'));
+  assert.equal(stub.exchanges.length, 1);
+  assert.equal(db.sqlite.prepare('SELECT COUNT(*) n FROM auth_sessions').get().n, 1);
 });
 
 test('failed magic delivery keeps the existing authenticated session and removes incomplete pending login', async t => {

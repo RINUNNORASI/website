@@ -336,39 +336,64 @@
     return response({sent: true, retryAfterSeconds: 60, method: 'magic-link'}, 200,
       {'Set-Cookie': cookie(token, false, LOGIN_COOKIE, LOGIN_LIFE / 1000)});
   }
-  function callbackResponse(success, sessionToken) {
-    const headers = new Headers({'Location': '/?email-login=' + (success ? 'success' : 'expired') + '#settings',
+  const CALLBACK_REASONS = new Set(['invalid_callback', 'browser_cookie_missing', 'pending_unavailable', 'verifier_invalid',
+    'provider_exchange_error', 'identity_verification_failed', 'session_storage_failed', 'auth_configuration_error']);
+  function callbackReason(value) { return CALLBACK_REASONS.has(value) ? value : 'invalid_callback'; }
+  function callbackDiagnostic(reason, providerStatus) {
+    // These fixed categories are the only callback data permitted in logs. Never
+    // attach an exception, request URL, login code, email, cookie, or provider body.
+    const entry = {event: 'email_magic_callback', outcome: 'failed', reason: callbackReason(reason)};
+    if (Number.isInteger(providerStatus) && providerStatus >= 100 && providerStatus <= 599) entry.httpStatus = providerStatus;
+    try { console.warn(JSON.stringify(entry)); } catch (_) { /* Logging cannot change authentication. */ }
+  }
+  function callbackResponse(success, sessionToken, reason) {
+    const headers = new Headers({'Location': '/?email-login=' + (success ? 'success'
+      : 'expired&email-login-reason=' + callbackReason(reason)) + '#settings',
       'Cache-Control': 'private, no-store', 'Referrer-Policy': 'no-referrer', 'X-Content-Type-Options': 'nosniff'});
     headers.append('Set-Cookie', cookie('', true, LOGIN_COOKIE));
     if (sessionToken) headers.append('Set-Cookie', cookie(sessionToken));
     return new Response(null, {status: 303, headers});
   }
   async function handleMagicCallback(request, env) {
-    let pendingHash;
+    let pendingHash; let reason = 'auth_configuration_error'; let providerStatus;
     try {
       const cfg = config(env);
+      if (!cfg) throw new AuthError(503, 'email_auth_misconfigured');
+      reason = 'invalid_callback';
       const url = new URL(request.url); const codes = url.searchParams.getAll('code');
-      if (!cfg || cfg.loginMethod !== 'magic-link' || request.method !== 'GET' || url.pathname !== '/'
+      if (cfg.loginMethod !== 'magic-link' || request.method !== 'GET' || url.pathname !== '/'
         || codes.length !== 1 || Array.from(url.searchParams.keys()).some(key => key !== 'code')
         || !/^[A-Za-z0-9._~-]{16,1024}$/.test(codes[0])) throw new AuthError(400, 'magic_link_expired');
+      reason = 'browser_cookie_missing';
       const token = cookieToken(request, LOGIN_COOKIE); if (!token) throw new AuthError(400, 'magic_link_expired');
+      reason = 'session_storage_failed';
       pendingHash = await digest(token); const db = dbFor(env);
       // Claim before exchanging with the provider: one browser-bound attempt, including concurrent callbacks.
       const pending = await db.prepare(`UPDATE auth_pending_logins SET claimed_at = ? WHERE login_hash = ?
         AND claimed_at = 0 AND expires_at > ? RETURNING verifier_ciphertext, expected_email`)
         .bind(Date.now(), pendingHash, Date.now()).first();
-      if (!pending) throw new AuthError(400, 'magic_link_expired');
+      if (!pending) { reason = 'pending_unavailable'; throw new AuthError(400, 'magic_link_expired'); }
+      reason = 'verifier_invalid';
       const verifier = await openLogin(cfg, pending.verifier_ciphertext, pendingHash);
+      reason = 'provider_exchange_error';
       const exchanged = await provider(cfg, '/token?grant_type=pkce', 'POST', {auth_code: codes[0], code_verifier: verifier});
+      providerStatus = exchanged.status;
       if (!exchanged.ok) throw new AuthError(400, 'magic_link_expired');
-      const tokens = tokenPair(exchanged.body); const proof = await verifiedUser(cfg, tokens.access, pending.expected_email);
+      const tokens = tokenPair(exchanged.body); providerStatus = undefined;
+      reason = 'identity_verification_failed';
+      const proof = await verifiedUser(cfg, tokens.access, pending.expected_email);
+      reason = 'session_storage_failed';
       const created = await createSession(request, env, cfg, tokens, proof);
-      await db.prepare('DELETE FROM auth_pending_logins WHERE login_hash = ?').bind(pendingHash).run();
+      // The atomic claim already prevents reuse. A cleanup outage must not
+      // withhold the cookie for a session that was successfully established.
+      try { await db.prepare('DELETE FROM auth_pending_logins WHERE login_hash = ?').bind(pendingHash).run(); }
+      catch (_) { try { console.warn('email_magic_callback pending_cleanup_deferred'); } catch (_) {} }
       return callbackResponse(true, created.token);
     } catch (_) {
       // Redirect with a fixed harmless status; provider codes, credentials and messages never enter URLs.
+      callbackDiagnostic(reason, providerStatus);
       if (pendingHash && env?.DB) try { await env.DB.prepare('DELETE FROM auth_pending_logins WHERE login_hash = ?').bind(pendingHash).run(); } catch (_) {}
-      return callbackResponse(false);
+      return callbackResponse(false, undefined, reason);
     }
   }
   async function handle(request, env) {

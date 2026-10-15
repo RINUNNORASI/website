@@ -52,13 +52,16 @@ class Dialog extends Node {
 }
 function harness(fetch, hooks = {}) {
   const nodes = [], calls = [], before = [], changed = [], statuses = [], backups = [], timers = new Map();
+  const replacements = [];
   let nextTimer = 1, cloudRunning = true;
   const document = {
     getElementById: id => nodes.find(node => node.id === id),
     createElement: () => new Dialog(),
     body: {appendChild: node => nodes.push(node)}
   };
-  const window = {document, AbortController,
+  const window = {document, AbortController, URL, URLSearchParams,
+    location: {href: hooks.pageUrl || 'https://xunci.example.test/'},
+    history: {replaceState(_state, _title, path) {replacements.push(path); window.location.href = new URL(path, window.location.href).href;}},
     fetch: async (url, opts) => {calls.push({url, ...opts}); return fetch(url.replace('/api/auth/', ''), opts, calls);},
     setTimeout: (fn, delay) => {const id = nextTimer++; timers.set(id, {fn, delay}); return id;},
     clearTimeout: id => timers.delete(id),
@@ -73,7 +76,8 @@ function harness(fetch, hooks = {}) {
     onBackup: data => {backups.push(copy(data)); hooks.onBackup?.(data);}
   });
   const dialog = () => nodes.find(node => node.id === 'email-auth-dialog');
-  return {ui, calls, before, changed, statuses, backups, timers, dialog, cloudRunning: () => cloudRunning,
+  return {ui, calls, before, changed, statuses, backups, timers, dialog, replacements, pageUrl: () => window.location.href,
+    cloudRunning: () => cloudRunning,
     input(id, value) {
       const element = dialog().querySelector('#' + id); assert.ok(element, id + ' input exists'); element.value = value;
       dialog().events.get('input')({target: element});
@@ -474,4 +478,128 @@ test('opening the account after session expiry refreshes identity and offers a n
   assert.match(h.dialog().querySelector('#email-auth-send').textContent, /发送登录链接/);
   assert.deepEqual(h.changed, [{reason: 'logout', user: null}]);
   assert.equal(h.before[0].reason, 'logout');
+});
+
+test('failed callback stays visible after initialization and needs an explicit action before sending mail', async () => {
+  const h = harness(async path => {
+    if (path === 'config') return reply({enabled: true, loginMethod: 'magic-link'});
+    if (path === 'session') return reply(signedOut());
+    if (path === 'otp') return reply({sent: true, retryAfterSeconds: 60, method: 'magic-link'});
+    assert.fail(path);
+  }, {pageUrl: 'https://xunci.example.test/?lang=zh&email-login=expired&email-login-reason=browser_cookie_missing#settings'});
+  const state = await h.ui.init();
+  assert.equal(state.status, 'callback-error');
+  assert.equal(h.dialog().open, true);
+  assert.match(h.dialog().innerHTML, /登录尚未完成/);
+  assert.match(h.dialog().innerHTML, /没有找到发起登录时的浏览器记录/);
+  assert.match(h.dialog().innerHTML, /邮箱内置浏览器/);
+  assert.equal(h.pageUrl(), 'https://xunci.example.test/?lang=zh#settings');
+  assert.deepEqual(h.replacements, ['/?lang=zh#settings']);
+  assert.equal(h.cloudRunning(), false);
+  assert.equal(h.changed.length, 0);
+  assert.deepEqual(h.calls.map(call => call.url), ['/api/auth/config', '/api/auth/session']);
+  await h.runTimer(1000); await h.ui.open();
+  assert.match(h.dialog().innerHTML, /没有找到发起登录时的浏览器记录/);
+  h.input('email-auth-email', 'learner@example.test'); await h.submit('email');
+  assert.equal(h.ui.getStatus().status, 'link-sent');
+  assert.equal(h.calls.filter(call => call.url === '/api/auth/otp').length, 1);
+});
+
+test('provider error fragments are cleaned and shown as fixed persistent copy without reflecting provider data', async () => {
+  const untrusted = '<img src=x onerror=alert(1)> provider-secret';
+  const fragment = new URLSearchParams({error: 'access_denied', error_code: 'otp_expired',
+    error_description: untrusted, access_token: 'access-secret', refresh_token: 'refresh-secret', unknown: 'untrusted'});
+  const h = harness(async path => {
+    if (path === 'config') return reply({enabled: true, loginMethod: 'magic-link'});
+    if (path === 'session') return reply(signedOut());
+    assert.fail(path);
+  }, {pageUrl: 'https://xunci.example.test/?lang=zh#' + fragment});
+  await h.ui.init();
+  assert.equal(h.pageUrl(), 'https://xunci.example.test/?lang=zh#settings');
+  assert.match(h.dialog().innerHTML, /登录链接已过期、已使用/);
+  for (const value of [untrusted, 'provider-secret', 'access-secret', 'refresh-secret', 'untrusted']) {
+    assert.equal(h.dialog().innerHTML.includes(value), false);
+    assert.equal(JSON.stringify(h.statuses).includes(value), false);
+  }
+  assert.equal(h.calls.some(call => call.method === 'POST'), false);
+});
+
+test('unknown callback reasons and credential query values never become visible messages', async () => {
+  const h = harness(async path => {
+    if (path === 'config') return reply({enabled: true, loginMethod: 'magic-link'});
+    if (path === 'session') return reply(signedOut());
+    assert.fail(path);
+  }, {pageUrl: 'https://xunci.example.test/?email-login=expired&email-login-reason=provider-secret&code=private-code&token_hash=private-hash&error_description=private-text#unknown=private-fragment'});
+  await h.ui.init();
+  assert.equal(h.pageUrl(), 'https://xunci.example.test/#settings');
+  assert.match(h.dialog().innerHTML, /这次邮箱登录未完成/);
+  assert.doesNotMatch(h.dialog().innerHTML, /provider-secret|private-code|private-hash|private-text/);
+  assert.doesNotMatch(JSON.stringify(h.ui.getStatus()), /provider-secret|private-code|private-hash|private-text/);
+});
+
+test('an existing account remains paused after a failed callback until the user closes the message', async () => {
+  const h = harness(async path => {
+    if (path === 'config') return reply({enabled: true, loginMethod: 'magic-link'});
+    if (path === 'session') return reply(signedIn());
+    assert.fail(path);
+  }, {pageUrl: 'https://xunci.example.test/?email-login=expired&email-login-reason=provider_exchange_error#settings'});
+  await h.ui.init();
+  assert.equal(h.ui.getStatus().authenticated, true);
+  assert.equal(h.ui.getStatus().status, 'callback-error');
+  assert.equal(h.cloudRunning(), false);
+  assert.match(h.dialog().innerHTML, /邮箱登录暂时未完成/);
+  assert.equal(h.changed.length, 0);
+  await h.click('close');
+  assert.equal(h.cloudRunning(), true);
+  assert.deepEqual(h.changed, [{reason: 'cancel', user: signedIn().user}]);
+});
+
+test('callback failures never bypass a pending migration decision', async () => {
+  let pending = true, completed = false;
+  const h = harness(async path => {
+    if (path === 'config') return reply({enabled: true, loginMethod: 'magic-link'});
+    if (path === 'session') return reply(signedIn(pending));
+    if (path === 'skip-legacy') {pending = false; return reply({skipped: true});}
+    assert.fail(path);
+  }, {pageUrl: 'https://xunci.example.test/?email-login=expired#settings'});
+  const task = h.ui.init().then(value => {completed = true; return value;});
+  await settle();
+  assert.equal(completed, false);
+  assert.match(h.dialog().innerHTML, /带上你的学习记录/);
+  assert.equal(h.cloudRunning(), false);
+  assert.equal(h.changed.length, 0);
+  await h.click('skip'); await h.click('confirm-skip'); await task;
+  assert.equal(h.ui.getStatus().authenticated, true);
+  assert.deepEqual(h.changed.map(change => change.reason), ['migration']);
+});
+
+test('a success marker is checked against the real server session and reports a missing session cookie', async () => {
+  const h = harness(async path => {
+    if (path === 'config') return reply({enabled: true, loginMethod: 'magic-link'});
+    if (path === 'session') return reply(signedOut());
+    assert.fail(path);
+  }, {pageUrl: 'https://xunci.example.test/?email-login=success#settings'});
+  await h.ui.init();
+  assert.equal(h.pageUrl(), 'https://xunci.example.test/#settings');
+  assert.equal(h.ui.getStatus().authenticated, false);
+  assert.equal(h.ui.getStatus().status, 'callback-error');
+  assert.match(h.dialog().innerHTML, /邮箱验证后未能保持登录状态/);
+  assert.match(h.dialog().innerHTML, /允许此网站使用 Cookie/);
+  assert.equal(h.cloudRunning(), false);
+  assert.equal(h.calls.some(call => call.method === 'POST'), false);
+});
+
+test('a successful callback still uses the server identity and leaves normal account startup intact', async () => {
+  const h = harness(async path => {
+    if (path === 'config') return reply({enabled: true, loginMethod: 'magic-link'});
+    if (path === 'session') return reply(signedIn());
+    assert.fail(path);
+  }, {pageUrl: 'https://xunci.example.test/?email-login=success#settings'});
+  const state = await h.ui.init();
+  assert.equal(state.status, 'signed-in');
+  assert.deepEqual(copy(state.user), signedIn().user);
+  assert.equal(h.dialog(), undefined);
+  assert.equal(h.pageUrl(), 'https://xunci.example.test/#settings');
+  assert.equal(h.before.length, 0);
+  assert.equal(h.calls.some(call => call.method === 'POST'), false);
 });
