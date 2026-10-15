@@ -1,5 +1,4 @@
-# Copy to the public monorepo root as render.yaml for the connectivity probe.
-# No databases, persistent disks, paid plans, or secrets are required.
+# Copy to render.yaml in the public monorepo after configuring the existing service.
 services:
   - type: web
     name: xunci-access-test
@@ -9,7 +8,18 @@ services:
     repo: https://github.com/RINUNNORASI/website
     branch: codex/render-access-test
     rootDir: ielts-seven
-    buildCommand: node --check scripts/render-probe.mjs
-    startCommand: node scripts/render-probe.mjs
+    buildCommand: node scripts/build-worker.mjs --cloudflare && node scripts/verify-render.mjs
+    startCommand: node scripts/serve-render.mjs
     healthCheckPath: /health
     autoDeployTrigger: "off"
+    envVars:
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_PUBLISHABLE_KEY
+        sync: false
+      - key: SESSION_ENCRYPTION_KEY
+        sync: false
+      - key: CLOUDFLARE_ACCOUNT_ID
+        sync: false
+      - key: CLOUDFLARE_D1_API_TOKEN
+        sync: false
