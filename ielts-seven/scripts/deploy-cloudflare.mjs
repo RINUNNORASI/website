@@ -4,6 +4,7 @@ import {readFile, writeFile, mkdtemp, rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
+import {stripVTControlCharacters} from 'node:util';
 
 const PROJECT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const WRANGLER_VERSION = '4.151.0';
@@ -13,6 +14,34 @@ export const REQUIRED_SECRETS = Object.freeze([
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 class DeploymentError extends Error {}
+
+// Keep the error paragraph, not Wrangler's binding table or arbitrary build output.
+// Redact credentials both from this build's environment and common remote secret formats.
+function safeWranglerError(result, env) {
+  const errorMarker = /\[ERROR\]|^\s*(?:Error|UserError|APIError|FatalError):/i;
+  const streams = [result?.stderr || '', result?.stdout || '']
+    .map(output => stripVTControlCharacters(output).split(/\r?\n/));
+  const lines = streams.find(output => output.some(line => errorMarker.test(line))) || streams[0];
+  const start = lines.findIndex(line => errorMarker.test(line));
+  let detail = start >= 0 ? lines.slice(start, start + 28).join('\n')
+    : lines.filter(line => /authentication error|permission denied|forbidden|not authorized|\[code:\s*\d+\]/i.test(line)).slice(0, 4).join('\n');
+  const values = Object.entries(env).filter(([name, value]) =>
+    /TOKEN|KEY|SECRET|PASSWORD|CREDENTIAL|AUTHORIZATION|SUPABASE_URL/i.test(name)
+      && typeof value === 'string' && value.length >= 6)
+    .flatMap(([, value]) => [value, encodeURIComponent(value), JSON.stringify(value).slice(1, -1)])
+    .sort((a, b) => b.length - a.length);
+  for (const value of values) detail = detail.split(value).join('[REDACTED]');
+  detail = detail
+    .replace(/\bsb_(?:publishable|secret)_[A-Za-z0-9_-]+/g, '[REDACTED]')
+    .replace(/\beyJ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g, '[REDACTED]')
+    .replace(/(?<![A-Za-z0-9+/])[A-Za-z0-9+/]{43}=(?![A-Za-z0-9+/=])/g, '[REDACTED]')
+    .replace(/\b[A-Fa-f0-9]{64}\b/g, '[REDACTED]')
+    .replace(/https:\/\/[a-z0-9]{20}\.supabase\.co\b/g, '[SUPABASE_URL]')
+    .replace(/(\bBearer\s+)[^\s"'<>]+/gi, '$1[REDACTED]')
+    .replace(/([?&](?:token|key|secret|password|api_key|access_token|refresh_token)=)[^\s&#"'<>]+/gi, '$1[REDACTED]')
+    .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, '');
+  return detail.trim().slice(0, 3000);
+}
 
 function suppliedSecrets(env) {
   const names = REQUIRED_SECRETS.filter(name => env[name] !== undefined);
@@ -37,7 +66,7 @@ function suppliedSecrets(env) {
   return secrets;
 }
 
-// Capture CLI output rather than forwarding it: errors must never echo build secrets.
+// Capture CLI output so failures can report a redacted error without exposing bindings.
 export async function runWrangler(args, {cwd, env}) {
   let installed;
   try { installed = JSON.parse(await readFile(path.join(cwd, 'node_modules/wrangler/package.json'), 'utf8')); }
@@ -83,10 +112,15 @@ export async function deployCloudflare({cwd = PROJECT_ROOT, env = process.env, r
       const status = Number.isInteger(result?.code) ? ` (Wrangler exit code ${result.code})` : '';
       const permissionFailure = /\[code:\s*10000\]|authentication error|permission denied|forbidden|not authorized/i
         .test((result?.stdout || '') + '\n' + (result?.stderr || ''));
+      const requiredSecretsMissing = /required secrets have not been set/i
+        .test((result?.stdout || '') + '\n' + (result?.stderr || ''));
       const hint = permissionFailure
-        ? ' Check that the build API token is valid and has Account > D1 > Edit for this account.'
+        ? ` Check that the build API token is valid and has Account > ${label === 'Worker deployment' ? 'Workers Scripts' : 'D1'} > Edit for this account.`
+        : requiredSecretsMissing
+        ? ' Add SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, and SESSION_ENCRYPTION_KEY as build secrets, then redeploy.'
         : ' Check the account access and deployment configuration.';
-      throw new DeploymentError(`Cloudflare ${label} failed${status}.${hint}`);
+      const detail = safeWranglerError(result, env);
+      throw new DeploymentError(`Cloudflare ${label} failed${status}.${hint}${detail ? '\nWrangler error (credentials redacted):\n' + detail : ''}`);
     }
     return result.stdout;
   };

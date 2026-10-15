@@ -152,7 +152,7 @@ test('creation failure and missing post-creation lookup stop before migrations',
   }
 });
 
-test('publishing failure also removes temporary files and never reveals Wrangler output', async t => {
+test('publishing failure also removes temporary files and never reveals secret values', async t => {
   const options = await fixture(t); const {deployCloudflare} = await api; const messages = [];
   await assert.rejects(deployCloudflare({...options, env: secrets, log: message => messages.push(message), run: async args => {
     if (args[1] === 'list') return success(JSON.stringify([database]));
@@ -162,6 +162,45 @@ test('publishing failure also removes temporary files and never reveals Wrangler
   assert.deepEqual(await fs.readdir(options.cwd), ['wrangler.jsonc']);
   assert.deepEqual(await fs.readdir(options.secretTempRoot), []);
   assert.equal(Object.values(secrets).some(value => messages.join('\n').includes(value)), false);
+});
+
+test('publishing errors show the actionable provider error while redacting local and remote credentials', async t => {
+  const options = await fixture(t); const {deployCloudflare} = await api;
+  const env = {...secrets, CLOUDFLARE_API_TOKEN: 'private-cloudflare-build-token'};
+  const remoteKey = Buffer.alloc(32, 9).toString('base64');
+  const remotePublishable = 'sb_publishable_' + 'b'.repeat(32);
+  const jwt = 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ0ZXN0In0.signature';
+  const stderr = '\u001b[31m✘ [ERROR]\u001b[0m A request to the Cloudflare API failed. [code: 10021]\n\n'
+    + '  The following required secrets have not been set: SESSION_ENCRYPTION_KEY\n'
+    + Object.values(env).join('\n') + '\n' + encodeURIComponent(env.SESSION_ENCRYPTION_KEY) + '\n'
+    + remoteKey + '\n' + remotePublishable + '\n' + jwt + '\n'
+    + 'Authorization: Bearer unknown-bearer-token\nhttps://example.com/?access_token=unknown-query-token';
+  await assert.rejects(deployCloudflare({...options, env, log() {}, run: async args => {
+    if (args[1] === 'list') return success(JSON.stringify([database]));
+    return args[0] === 'deploy' ? {code: 1, stdout: 'Unrelated binding table must not appear.', stderr} : success();
+  }}), error => {
+    assert.match(error.message, /required secrets have not been set: SESSION_ENCRYPTION_KEY/);
+    assert.match(error.message, /Add SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, and SESSION_ENCRYPTION_KEY as build secrets/);
+    assert.match(error.message, /\[code: 10021\]/);
+    for (const value of [...Object.values(env), encodeURIComponent(env.SESSION_ENCRYPTION_KEY),
+      remoteKey, remotePublishable, jwt, 'unknown-bearer-token', 'unknown-query-token']) {
+      assert.ok(!error.message.includes(value));
+    }
+    assert.ok(!error.message.includes('\u001b'));
+    assert.ok(!error.message.includes('Unrelated binding table'));
+    return true;
+  });
+  assert.deepEqual(await fs.readdir(options.cwd), ['wrangler.jsonc']);
+  assert.deepEqual(await fs.readdir(options.secretTempRoot), []);
+});
+
+test('Worker authorization errors identify Workers Scripts permission and bound the diagnostic output', async t => {
+  const options = await fixture(t); const {deployCloudflare} = await api;
+  await assert.rejects(deployCloudflare({...options, env: {}, log() {}, run: async args => {
+    if (args[1] === 'list') return success(JSON.stringify([database]));
+    return args[0] === 'deploy' ? {code: 1, stdout: '', stderr: '[ERROR] Authentication error [code: 10000]\n' + 'x'.repeat(5000)} : success();
+  }}), error => /Account > Workers Scripts > Edit/.test(error.message)
+    && !/Account > D1 > Edit/.test(error.message) && error.message.length < 3400);
 });
 
 test('successful deployment reports only the matching workers.dev URL from captured output', async t => {
