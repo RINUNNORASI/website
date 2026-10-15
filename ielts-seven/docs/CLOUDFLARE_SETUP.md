@@ -10,12 +10,12 @@
 | --- | --- |
 | Git 仓库 | `website` |
 | 部署分支 | `cloudflare-deploy` |
-| 根目录 / Root directory | `ielts-seven` |
+| 根目录 / Root directory | 留空 |
 | Worker 名称 / Project name | `xunci-ielts` |
-| Build command | `npm run build:cloudflare` |
-| Deploy command | `npm run deploy` |
+| Build command | `npm --prefix ielts-seven ci && npm --prefix ielts-seven run build:cloudflare` |
+| Deploy command | `npm --prefix ielts-seven run deploy` |
 
-如果使用完整项目的独立仓库，根目录留空。保持 Free 方案。
+上表从仓库根目录明确进入雅思子目录，适用于 `website` 这样的多项目仓库。如果使用完整项目的独立仓库，根目录仍留空，Build command 改为 `npm ci && npm run build:cloudflare`，Deploy command 改为 `npm run deploy`。保持 Free 方案。
 
 展开构建环境变量配置，添加以下三项。优先选择 Secret 类型；若创建页面仅提供环境变量，创建后可在 **Settings → Build → Variables and secrets** 中管理。这里的值在构建时可用，部署脚本会通过 Wrangler 的 `--secrets-file` 同时写入 Worker 的运行时 Secrets，因此无需再填一遍。
 
@@ -27,15 +27,17 @@
 
 会话密钥只生成一次，后续部署沿用。可在自己的电脑上用 `openssl rand -base64 32` 生成。密钥只填 Cloudflare，不写进 Git 仓库。邮箱认证的固定开关由独立部署适配器强制启用。
 
-点击部署后，脚本按顺序执行：读取现有 D1 清单 → 必要时创建 `xunci-ielts-db` → 执行追加迁移 → 构建并发布 Worker。数据库查询失败时停止；迁移失败时不会发布新程序。后续部署复用已有数据库。这个过程不删除已有数据库，也不修改旧站。
+点击部署后，Build command 先安装依赖并生成独立 Worker；Deploy command 再按顺序读取现有 D1 清单 → 必要时创建 `xunci-ielts-db` → 执行追加迁移 → 发布 Worker。数据库查询失败时停止；迁移失败时不会发布新程序。后续部署复用已有数据库。这个过程不删除已有数据库，也不修改旧站。
 
 ### 构建令牌的数据库权限
 
-Cloudflare 自动生成的 Workers Builds API token 默认权限可能不包含 D1。请在 **Settings → Build** 查看使用的 API token 名称，再到个人菜单 **My Profile → API Tokens** 编辑同名令牌，在保留现有权限的基础上增加 **Account → D1 → Edit**，账号范围保持自己的当前账号。保存同一令牌即可继续使用；令牌值不需要写进网站源代码。
+Cloudflare 自动生成的 Workers Builds API token 默认权限可能不包含 D1。如果数据库步骤报告权限不足，在 **Settings → Build** 查看使用的 API token 名称，再到个人菜单 **My Profile → API Tokens** 编辑同名令牌，在保留现有权限的基础上增加 **Account → D1 → Edit**，账号范围保持自己的当前账号。保存同一令牌即可继续使用；令牌值不需要写进网站源代码。数据库步骤已通过时，无需修改这一项。
 
 ### 出现另一个网站、`/zh/` 页面或克隆阶段找不到目录
 
-`website` 仓库根目录还有一个独立网站。本项目的 Cloudflare 构建必须同时使用生产分支 `cloudflare-deploy` 和根目录 `ielts-seven`。在 **Settings → Build** 检查并保存这两项，以及上表的 Build command 和 Deploy command。更改分支后应从新分支开始一次新构建，旧部署对应的提交可能不含雅思子目录。
+`website` 仓库根目录还有一个独立网站。在 **Settings → Build** 使用生产分支 `cloudflare-deploy`、留空的根目录和上表的两个带 `--prefix ielts-seven` 的命令。更改分支后应等待新提交触发一次新构建；重试旧构建仍可能使用旧提交，旧提交可能不含雅思子目录。必要时临时在 Build command 开头添加 `git rev-parse HEAD && ls -l ielts-seven/package.json ielts-seven/package-lock.json &&`，通过日志核对实际提交和文件。
+
+若构建通过、发布失败，查看日志中的 **Wrangler error (credentials redacted)** 段。缺少登录密钥时，在 **Settings → Build → Variables and secrets** 添加上述三项 Secret，保存后重试正确提交。`NAME=value` 按第一个等号拆分；Base64 会话密钥末尾的 `=` 属于值，必须保留。
 
 新的独立 Worker 会把旧的 `/zh`、`/zh/` 页面地址转到雅思工作台根页面。如果浏览器记住了之前网站的首页跳转，使用部署完成后的根地址打开。
 
