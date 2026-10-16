@@ -135,6 +135,7 @@ test('magic-link PKCE callback hands separate cookies through the real Node HTTP
   const confirmationCookie = confirmationHeader.split(';')[0];
   const form = await request(port, {path: '/api/auth/magic-confirm', headers: {Cookie: confirmationCookie}});
   assert.equal(form.status, 200); assert.ok(form.body.includes(EMAIL));
+  assert.equal(form.headers['referrer-policy'], 'same-origin', 'native form navigation must retain its Origin');
   const csrf = /name="csrf" value="([A-Za-z0-9_-]{43})"/.exec(form.body)[1];
   assert.equal(db.sqlite.prepare('SELECT COUNT(*) AS count FROM auth_sessions').get().count, 0);
   const confirmed = await request(port, {path: '/api/auth/magic-confirm', method: 'POST',

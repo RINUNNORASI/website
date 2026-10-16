@@ -495,6 +495,29 @@ test('a different browser can exchange the email link but gets no account/sessio
   assert.equal(db.sqlite.prepare('SELECT COUNT(*) n FROM auth_sessions').get().n, 1);
 });
 
+test('confirmation form preserves the same-origin POST Origin while credential callbacks suppress referrers', async t => {
+  const db=new FakeD1();t.after(()=>db.close());const env=environment(db,{EMAIL_AUTH_METHOD:'magic-link'});magicProvider(t);
+  const begun=await beginMagic(env),received=await receiveMagic(env,begun),form=await confirmationForm(env,received);
+  // A no-referrer policy makes the browser serialize Origin as null for a
+  // native form navigation. The credential-free confirmation page must permit
+  // its own origin; the code-bearing callback keeps the stricter policy.
+  assert.equal(form.page.headers.get('Referrer-Policy'),'same-origin');
+  assert.match(form.page.headers.get('Content-Security-Policy'),/form-action 'self'/);
+  assert.equal((await run(env,MAGIC_CALLBACK)).headers.get('Referrer-Policy'),'no-referrer');
+  for(const origin of ['null','https://attacker.example']){
+    const denied=await decideMagic(env,form,'confirm',{headers:{Origin:origin}});
+    assert.equal(denied.status,403);assert.equal((await denied.json()).error,'same_origin_required');
+    assert.equal(db.sqlite.prepare('SELECT COUNT(*) n FROM auth_sessions').get().n,0);
+  }
+  const noOrigin=request('magic-confirm','POST',new URLSearchParams({csrf:form.csrf,decision:'confirm'}).toString(),
+    {cookie:form.cookie,headers:{'Content-Type':'application/x-www-form-urlencoded'}});
+  noOrigin.headers.delete('Origin');
+  assert.equal((await (await handler).fetch(noOrigin,env)).status,403);
+  const accepted=await decideMagic(env,form);
+  assert.equal(accepted.headers.get('Location'),'/?email-login=success#settings');
+  assert.equal(db.sqlite.prepare('SELECT COUNT(*) n FROM auth_sessions').get().n,1);
+});
+
 test('old email links retain cookie-based same-browser fallback and still require explicit account confirmation', async t => {
   const db = new FakeD1(); t.after(() => db.close()); const env = environment(db, {EMAIL_AUTH_METHOD: 'magic-link'}); magicProvider(t);
   const begun = await beginMagic(env); const received = await receiveMagic(env, begun, {legacy: true});

@@ -370,11 +370,11 @@
     if (sessionToken) headers.append('Set-Cookie', cookie(sessionToken));
     return new Response(null, {status: 303, headers});
   }
-  function html(body, script) {
+  function html(body, script, {referrerPolicy = 'no-referrer'} = {}) {
     const nonce = randomToken();
     const styles = 'body{margin:0;background:#f5f7f1;color:#193d37;font:17px/1.7 system-ui,sans-serif}main{max-width:32rem;margin:12vh auto;padding:2rem;background:white;border:1px solid #dce5d8;border-radius:18px}h1{font-size:1.5rem}p{overflow-wrap:anywhere}button,a{font:inherit}button{padding:.7rem 1rem;border:1px solid #1e5048;border-radius:8px;background:#1e5048;color:white;cursor:pointer}button[value=cancel]{background:white;color:#1e5048;margin-left:.5rem}small{color:#66776c}';
     const headers = {'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'private, no-store',
-      'Referrer-Policy': 'no-referrer', 'X-Content-Type-Options': 'nosniff', 'X-Frame-Options': 'DENY',
+      'Referrer-Policy': referrerPolicy, 'X-Content-Type-Options': 'nosniff', 'X-Frame-Options': 'DENY',
       'X-Robots-Tag': 'noindex, nofollow', 'Content-Security-Policy': "default-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'; connect-src 'self'; style-src 'nonce-" + nonce + "'; script-src 'nonce-" + nonce + "'"};
     return new Response('<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>确认邮箱登录 · 循词</title><style nonce="' + nonce + '">' + styles + '</style></head><body><main>' + body + '</main>' + (script ? '<script nonce="' + nonce + '">' + script + '</script>' : '') + '</body></html>', {headers});
   }
@@ -474,7 +474,9 @@
       if (cfg.loginMethod !== 'magic-link') throw new AuthError(400, 'confirmation_expired');
       const payload = request.method === 'POST' ? await postPayload(request, ['csrf', 'decision'], true) : null;
       candidate = await readConfirmation(request, env, cfg);
-      if (request.method === 'GET') return html('<h1>确认在此浏览器登录</h1><p>邮箱：<strong>' + escapeHTML(candidate.proof.email) + '</strong></p><p>请确认这是你要使用的账号。如本浏览器已登录其他账号，确认后将切换到这个邮箱。</p><form method="post" action="/api/auth/magic-confirm"><input type="hidden" name="csrf" value="' + escapeHTML(candidate.csrf) + '"><button name="decision" value="confirm" type="submit">确认登录</button><button name="decision" value="cancel" type="submit">取消</button></form><p><small>此确认在 5 分钟后失效。取消会保留当前账号。</small></p>');
+      // Native form POSTs under no-referrer serialize Origin as null. This
+      // credential-free URL may refer to itself; callbacks still suppress it.
+      if (request.method === 'GET') return html('<h1>确认在此浏览器登录</h1><p>邮箱：<strong>' + escapeHTML(candidate.proof.email) + '</strong></p><p>请确认这是你要使用的账号。如本浏览器已登录其他账号，确认后将切换到这个邮箱。</p><form method="post" action="/api/auth/magic-confirm"><input type="hidden" name="csrf" value="' + escapeHTML(candidate.csrf) + '"><button name="decision" value="confirm" type="submit">确认登录</button><button name="decision" value="cancel" type="submit">取消</button></form><p><small>此确认在 5 分钟后失效。取消会保留当前账号。</small></p>', undefined, {referrerPolicy: 'same-origin'});
       if (!payload || payload.csrf !== candidate.csrf || !['confirm', 'cancel'].includes(payload.decision)) throw new AuthError(403, 'explicit_confirmation_required');
       const db = dbFor(env);
       const current = cookieToken(request);
