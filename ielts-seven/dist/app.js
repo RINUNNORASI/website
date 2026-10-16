@@ -5,6 +5,7 @@
   const S = window.IELTS_SYNC;
   const emailCallback=window.IELTS_AUTH?.consumeCallback();
   let cloudClient=null, cloudStatus={status:"loading",message:"正在连接",user:null}, cloudLessons=[], wordCards=[];
+  let readingSyncReady=false, lessonCatalogReady=false;
   let authClient=null, authStatus={status:'loading',enabled:null,authenticated:false,user:null},authBootReady=false;
   const $ = (s, root = document) => root.querySelector(s);
   const esc = x => String(x ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -39,8 +40,12 @@
   function showModal(html){$('#modal-content').innerHTML=html;$('#modal').showModal();}
   function closeModal(){$('#modal').close();}
   $('.dialog-close').onclick=closeModal;$('#modal').addEventListener('click',e=>{if(e.target===$('#modal'))closeModal();});
-  const lessonPool=()=>[...new Map([...(window.READING_LESSONS||[]),...cloudLessons,...state.customLessons].map(l=>[l.id,l])).values()];
+  const lessonPool=()=>{const lessons=new Map();for(const lesson of [...(window.READING_LESSONS||[]),...cloudLessons,...state.customLessons]){const previous=lessons.get(lesson.id);lessons.set(lesson.id,previous?.article?.paragraphs?.length&&!lesson.article?.paragraphs?.length&&previous.url===lesson.url?{...lesson,article:previous.article}:lesson);}return [...lessons.values()];};
+  const readingLoading=()=>!authBootReady||authStatus.status==='loading'||(authStatus.authenticated&&!activeOwner)||(!!activeOwner&&(!readingSyncReady||!lessonCatalogReady));
+  function rememberReadingDraft(){const form=$('#reading-form');if(!form)return;const lesson=selectedLesson();if(lesson)readingDrafts[date+'|'+lesson.id]=Object.fromEntries(new FormData(form));}
+  function refreshReadingContent(){const route=location.hash||'#today';if(route==='#reading'){rememberReadingDraft();reading();}else if(route==='#today')dashboard();}
   function dailyLesson(){
+    if(readingLoading())return null;
     const all=lessonPool(),rs=state.readingState;
     if(rs.assignments[date])return all.find(l=>l.id===rs.assignments[date])||null;
     const used=new Set(Object.values(rs.assignments));
@@ -110,6 +115,7 @@
   function editWord(id){const r=state.records.find(x=>x.id===id);showModal(`<div class="eyebrow">TEACHING NOTES</div><h2>补充 ${esc(r.word)} 的词卡</h2><div class="split"><label>英式 IPA<input id="edit-ipa" value="${esc(r.ipa)}"></label><label>词性<input id="edit-pos" value="${esc(r.pos)}"></label></div><label>中文核心义<input id="edit-meaning" value="${esc(r.meaning)}"></label><label>词族<input id="edit-family" value="${esc(r.family)}"></label><label>可靠记忆提示<input id="edit-memory" value="${esc(r.memory)}"></label><label>搭配，每行“英文 | 中文”<textarea id="edit-collocations" rows="3">${esc((r.collocations||[]).map(c=>c.en+' | '+c.zh).join('\n'))}</textarea></label><label>同义替换与区别<input id="edit-synonyms" value="${esc(r.synonyms)}"></label><label>英文例句<input id="edit-en" value="${esc(expEn(r))}"></label><label>例句中文<input id="edit-zh" value="${esc(expZh(r))}"></label><button class="button mt" data-action="save-word" data-id="${r.id}">保存词卡</button>`);}
   function selectedLesson(){return lessonPool().find(x=>x.id===currentLessonId)||dailyLesson();}
   function reading(){
+    if(!currentLessonId&&readingLoading()){main.innerHTML=heading('DAILY READING','正在加载今日精读','正在核对当前账号的阅读安排与课程内容…');return;}
     const token=accountToken(),l=selectedLesson();if(!l){main.innerHTML=heading('READING','阅读课程','打开课程档案，选择一篇文章继续练习。',`<button class="button" data-action="reading-archive">课程档案 →</button>`);return;}
     const result=state.readingState.results[date+'|'+l.id],formAnswers=readingDrafts[date+'|'+l.id]||result?.answers||{};
     main.innerHTML=window.IELTS_READING_UI.render({lesson:l,date,day:dayNo()||1,showAnswers,result,formAnswers,records:state.records,weaknesses:weaknesses(),completed:!!state.readingState.completed[l.id]});
@@ -169,7 +175,8 @@
   function showCloudConflict(){const c=cloudClient?.getConflict();if(!c){toast('当前没有版本冲突。');return;}showModal(`<div class="eyebrow">SYNC</div><h2>选择要保留的学习记录</h2><p>两台设备同时改了同一条记录，需要选择一个版本。可以先下载双方备份。</p><div class="conflict-summary"><div><strong>本机版本</strong><p>${c.local?.records?.length||0} 词</p></div><div><strong>云端版本</strong><p>${c.remote?.records?.length||0} 词</p></div></div><div class="form-row"><button class="button outline" data-action="cloud-backups">下载两份备份</button><button class="button" data-action="cloud-resolve-remote">采用云端版本</button><button class="button outline" data-action="cloud-resolve-local">用本机版本更新云端</button></div>`);}
   async function loadOnlineContent(){
     const token=accountToken();
-    try{const lessons=await window.IELTS_CLOUD.loadLessons();if(!sameAccount(token))return;cloudLessons=lessons;if((location.hash||'#today')==='#today')dashboard();}catch{}
+    try{const lessons=await window.IELTS_CLOUD.loadLessons();if(!sameAccount(token))return;rememberReadingDraft();cloudLessons=lessons;}catch{}
+    finally{if(sameAccount(token)){lessonCatalogReady=true;refreshReadingContent();}}
     if(!sameAccount(token))return;
     try{const response=await fetch('/api/word-cards',{credentials:'same-origin',cache:'no-store'});if(!sameAccount(token))return;if(response.ok){const data=await response.json();if(!sameAccount(token))return;if(Array.isArray(data.cards)){wordCards=data.cards;let changed=false;state.records=state.records.map(record=>{const card=wordCards.find(c=>E.normalizeWord(c.word)===record.word);if(!card||!record.needsContent)return record;changed=true;let next={...record,...card,id:record.id,word:record.word,firstSeen:record.firstSeen,lastReview:record.lastReview,nextReview:record.nextReview,contacts:record.contacts,contactDates:record.contactDates,reviewHistory:record.reviewHistory,errors:record.errors,extraReviews:record.extraReviews,status:record.status,origins:record.origins,needsContent:false};if(record.levelLocked)next.level=record.level;else next=E.setLevel(next,card.level||record.level);return next;});if(changed){save();render();}}}}catch{}
   }
@@ -178,7 +185,7 @@
     // clears the screen and stops all uploads; the existing storage is kept.
     cloudClient?.stop();cloudClient=null;accountGeneration++;
     if(activeOwner&&accountCache)try{accountCache.write(activeOwner,state);pendingOwnerSnapshots.delete(activeOwner);cacheWriteBlocked=false;}catch{pendingOwnerSnapshots.set(activeOwner,S.serialize(state));cacheWriteBlocked=true;storageProblem='无法保存上一账号的本机进度，已暂停账号切换；请先下载该账号备份。';if(requireBackup)throw Error(storageProblem);}
-    activeOwner=null;
+    activeOwner=null;readingSyncReady=false;lessonCatalogReady=false;
     state=makeInitialState();
     for(const key of Object.keys(readingDrafts))delete readingDrafts[key];
     practice.reset();currentLessonId=null;showAnswers=false;
@@ -192,12 +199,13 @@
     if(typeof userId!=='string'||!userId)return;if(!accountCache){cloudStatus={status:'unavailable',message:storageProblem||'个人记录缓存暂不可用，已暂停加载与上传。',user:null};updateCloudStatus();return;}
     if(activeOwner!==userId||cacheWriteBlocked){pauseCloud();try{const pending=pendingOwnerSnapshots.get(userId);const next=pending?S.validateState(pending):accountCache.read(userId);if(pending){accountCache.write(userId,next);pendingOwnerSnapshots.delete(userId);}state=next;cacheWriteBlocked=false;}catch(error){storageProblem=error.message;cloudStatus={status:'unavailable',message:storageProblem,user:null};render();return;}activeOwner=userId;render();}
     if(!canEdit())return;
-    cloudClient?.stop();const token=accountToken();
+    cloudClient?.stop();const token=accountToken();readingSyncReady=false;
     cloudClient=window.IELTS_CLOUD.create({expectedUserId:userId,getState:()=>{if(!sameAccount(token))throw Error('登录账号已变化，记录上传已暂停。');return state;},setState:next=>{if(!sameAccount(token))return;const form=$('#reading-form'),l=selectedLesson();if(form&&l)readingDrafts[date+'|'+l.id]=Object.fromEntries(new FormData(form));state=S.validateState(next);save(true);render();},makeInitialState,isPristine:pristine,
       onAccountMismatch:()=>{if(sameAccount(token))clearUnauthorized({status:'unauthorized',message:'登录账号已变化，已隐藏上一账号记录；请重新确认邮箱登录。'});},
       onStatus:status=>{if(!sameAccount(token))return;if(status.status==='unauthorized'||status.status==='account-changed'){clearUnauthorized(status);return;}cloudStatus=status;updateCloudStatus();},
       onConflict:()=>{if(!sameAccount(token))return;updateCloudStatus();toast('两台设备的记录有冲突，请在数据与设置处理。');}});
-    cloudClient.start();loadOnlineContent();
+    Promise.resolve(cloudClient.start()).finally(()=>{if(sameAccount(token)){readingSyncReady=true;refreshReadingContent();}});
+    loadOnlineContent();
   }
   async function resumeCloud(){
     if(authStatus.status==='callback-error'){pauseCloud();cloudStatus={status:'unauthorized',message:'邮箱登录未完成，请查看登录提示。',user:null};updateCloudStatus();return;}
@@ -212,7 +220,7 @@
     catch{if(generation!==accountGeneration)return;cloudStatus={status:'unauthorized',message:'请登录后查看自己的学习记录。',user:null};updateCloudStatus();}
   }
   async function startAccount(){
-    if(!window.IELTS_AUTH){authStatus={status:'disabled',enabled:false,authenticated:false,user:null};resumeCloud();return;}
+    if(!window.IELTS_AUTH){authStatus={status:'disabled',enabled:false,authenticated:false,user:null};authBootReady=true;resumeCloud();return;}
     authClient=window.IELTS_AUTH.create({callbackResult:emailCallback,onBeforeChange:()=>pauseCloud(true),
       onStatus:status=>{authStatus=status;if(['signed-out','error','callback-error'].includes(status.status)&&activeOwner)pauseCloud();const controls=$('#auth-account-controls');if(controls)controls.innerHTML=accountControls();const button=$('#account-button');if(button)button.textContent=status.enabled?'邮箱账号':'账号';},
       onChange:()=>{authStatus=authClient.getStatus();if(authBootReady)return resumeCloud();},

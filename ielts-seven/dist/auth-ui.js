@@ -28,10 +28,10 @@
   const recordCount = value => Number.isInteger(value) && value >= 0 ? value : 0;
   const CALLBACK_REASONS = new Set(['invalid_callback', 'browser_cookie_missing', 'pending_unavailable',
     'verifier_invalid', 'provider_exchange_error', 'identity_verification_failed', 'session_storage_failed',
-    'auth_configuration_error', 'link_expired']);
+    'auth_configuration_error', 'link_expired', 'confirmation_expired', 'login_context_changed']);
   const CALLBACK_FIELDS = ['email-login', 'email-login-reason', 'code', 'error', 'error_code', 'error_description',
     'access_token', 'refresh_token', 'token', 'token_hash', 'token_type', 'expires_at', 'expires_in',
-    'provider_token', 'provider_refresh_token'];
+    'provider_token', 'provider_refresh_token', 'email-login-state'];
 
   function safeCallback(value) {
     if (!value || (value.status !== 'success' && value.status !== 'error')) return null;
@@ -50,7 +50,8 @@
       const error = url.searchParams.get('email-login') !== 'success' || queryFailure || fragmentCallback;
       const reason = url.searchParams.get('email-login-reason');
       const providerExpired = [url.searchParams.get('error_code'), fragment.get('error_code')].includes('otp_expired');
-      const result = safeCallback({status: error ? 'error' : 'success',
+      const cancelled = url.searchParams.get('email-login') === 'cancelled' && !queryFailure && !fragmentCallback;
+      const result = cancelled ? null : safeCallback({status: error ? 'error' : 'success',
         reason: CALLBACK_REASONS.has(reason) ? reason : providerExpired ? 'link_expired' : ''});
       for (const key of CALLBACK_FIELDS) url.searchParams.delete(key);
       // Provider fragments can contain credentials and arbitrary text. Retain none of that fragment.
@@ -62,11 +63,17 @@
     } catch (_) { return null; }
   }
   function callbackMessage(reason) {
+    if (reason === 'confirmation_expired') {
+      return '登录确认已过期或已完成。请重新发送邮件，打开最新链接并在五分钟内确认邮箱。';
+    }
+    if (reason === 'login_context_changed') {
+      return '此浏览器的登录账号在确认期间发生了变化，已保留当前账号。请重新发送邮件，再核对要登录的邮箱。';
+    }
     if (reason === 'browser_cookie_missing') {
-      return '没有找到发起登录时的浏览器记录。请回到原浏览器重新发送邮件，并在同一浏览器打开最新链接；不要使用邮箱内置浏览器或无痕窗口。';
+      return '这封旧格式登录链接缺少原浏览器记录。请重新发送一封邮件，打开最新链接；新版链接支持在其他浏览器核对邮箱并确认登录。';
     }
     if (reason === 'session_unavailable') {
-      return '邮箱验证后未能保持登录状态。请允许此网站使用 Cookie，然后在同一浏览器重新发送邮件并打开最新登录链接。';
+      return '邮箱验证后未能保持登录状态。请允许当前浏览器使用此网站的 Cookie，再重新发送邮件并打开最新登录链接。';
     }
     if (['invalid_callback', 'pending_unavailable', 'verifier_invalid', 'link_expired'].includes(reason)) {
       return '登录链接已过期、已使用，或已被较新的邮件替代。请在这里重新发送邮件，只打开最新一封邮件中的链接。';
@@ -74,7 +81,7 @@
     if (['provider_exchange_error', 'identity_verification_failed', 'session_storage_failed', 'auth_configuration_error'].includes(reason)) {
       return '邮箱登录暂时未完成。请稍后重新发送登录邮件；如果仍无法登录，请联系网站管理员。';
     }
-    return '这次邮箱登录未完成。请在发起登录的浏览器中重新发送邮件，并打开最新一封邮件中的链接。';
+    return '这次邮箱登录未完成。请重新发送邮件，打开最新一封邮件中的链接并确认登录。';
   }
 
   function create(options) {
@@ -303,8 +310,8 @@
       } else if (phase === 'link-sent') {
         title = '查看邮箱，完成登录';
         intro = '登录邮件已发送至 <strong>' + escape(email) + '</strong>。';
-        content = '<p class="email-auth-note">点击邮件中的登录链接。请在发起登录的浏览器中打开链接。</p>' +
-          '<p class="email-auth-note">完成后，账号会在这里自动连接。</p>' +
+        content = '<p class="email-auth-note">点击邮件中的登录链接，可以在你希望登录的浏览器打开。核对页面显示的邮箱，再确认登录。</p>' +
+          '<p class="email-auth-note">账号会登录到完成确认的浏览器。不同浏览器需要分别登录；每封邮件的链接只可使用一次。</p>' +
           '<div class="email-auth-code-actions"><button id="email-auth-resend" type="button" class="email-auth-text" data-auth-action="resend">重新发送登录链接</button>' +
           '<button type="button" class="email-auth-text" data-auth-action="change-email"' + disabled + '>更换邮箱</button></div>';
       } else if (phase === 'code') {

@@ -149,12 +149,17 @@ test('email PKCE flow stays on the standalone origin and an authenticated email 
   const env = environment({DB: db});
   const previousFetch = globalThis.fetch;
   const calls = [];
+  let emailLoginState;
   globalThis.fetch = async (url, options) => {
     const address = new URL(url); const body = options.body && JSON.parse(options.body);
     calls.push(address.pathname);
     assert.equal(address.origin, 'https://' + PROJECT + '.supabase.co');
     if (address.pathname === '/auth/v1/otp') {
-      assert.equal(address.searchParams.get('redirect_to'), ORIGIN + '/');
+      const redirect = new URL(address.searchParams.get('redirect_to'));
+      assert.equal(redirect.origin + redirect.pathname, ORIGIN + '/');
+      assert.equal(redirect.search, '');
+      emailLoginState = new URLSearchParams(redirect.hash.slice(1)).get('email-login-state');
+      assert.match(emailLoginState, /^[A-Za-z0-9_-]{43}$/);
       assert.equal(body.code_challenge_method, 's256');
       return Response.json({});
     }
@@ -171,8 +176,22 @@ test('email PKCE flow stays on the standalone origin and an authenticated email 
   t.after(() => { globalThis.fetch = previousFetch; });
   const sent = await app.fetch(request('/api/auth/otp', 'POST', {email: 'alice@example.com'}), env);
   assert.equal(sent.status, 200);
-  const loginCookie = sent.headers.get('Set-Cookie').split(';')[0];
-  const signedIn = await app.fetch(request('/?code=standalone-authorization-code', 'GET', undefined, {Cookie: loginCookie}), env);
+  const bootstrap = await app.fetch(request('/?code=standalone-authorization-code'), env);
+  assert.equal(bootstrap.status, 200);
+  assert.match(bootstrap.headers.get('Content-Security-Policy'), /default-src 'none'/);
+  assert.equal(db.sqlite.prepare('SELECT COUNT(*) AS n FROM auth_sessions').get().n, 0);
+  const received = await app.fetch(request('/api/auth/magic-callback', 'POST', {code:'standalone-authorization-code',state:emailLoginState}), env);
+  assert.equal(received.status,200);
+  const confirmationCookie = received.headers.get('Set-Cookie').split(';')[0];
+  const confirmation = await app.fetch(request('/api/auth/magic-confirm','GET',undefined,{Cookie:confirmationCookie}),env);
+  assert.equal(confirmation.status,200);
+  const markup = await confirmation.text();
+  assert.match(markup,/alice@example.com/);
+  const csrf = /name="csrf" value="([A-Za-z0-9_-]{43})"/.exec(markup)[1];
+  assert.equal(db.sqlite.prepare('SELECT COUNT(*) AS n FROM auth_sessions').get().n,0,'viewing a verified email still requires explicit confirmation');
+  const signedIn = await app.fetch(new Request(ORIGIN+'/api/auth/magic-confirm',{method:'POST',
+    headers:{...forged,Origin:ORIGIN,Cookie:confirmationCookie,'Content-Type':'application/x-www-form-urlencoded'},
+    body:new URLSearchParams({csrf,decision:'confirm'})}), env);
   assert.equal(signedIn.status, 303);
   assert.equal(signedIn.headers.get('Location'), '/?email-login=success#settings');
   const sessionHeader = signedIn.headers.getSetCookie().find(value => value.startsWith('__Host-xunci-session='));

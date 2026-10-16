@@ -16,7 +16,7 @@ const stored=(id,state)=>[cacheKey(id),JSON.stringify({version:1,userId:id,state
 const deferred=()=>{let resolve,reject;const promise=new Promise((yes,no)=>{resolve=yes;reject=no;});return {promise,resolve,reject};};
 const settle=async()=>{for(let i=0;i<40;i++)await Promise.resolve();};
 
-function harness({entries=[],initial=signedOut(),deferInit=false,loadLessons=async()=>[],fetch=async()=>({ok:false}),storageFailure=false,noAuth=false}={}){
+function harness({entries=[],initial=signedOut(),deferInit=false,loadLessons=async()=>[],fetch=async()=>({ok:false}),storageFailure=false,noAuth=false,lessons=[],route='library',startSync=()=>undefined}={}){
   const storage=new Map(entries),nodes=new Map(),events=new Map(),clients=[],timers=new Map();let authHooks,auth=copy(initial),failStorage=storageFailure,nextTimer=1;
   const init=deferred();
   function node(selector){if(!nodes.has(selector))nodes.set(selector,{innerHTML:'',textContent:'',value:'',dataset:{},hidden:false,open:false,classList:{add(){},remove(){},toggle(){}},addEventListener(){},close(){this.open=false;},showModal(){this.open=true;},insertAdjacentHTML(_where,html){this.innerHTML=html+this.innerHTML;},scrollIntoView(){},focus(){},setSelectionRange(){}});return nodes.get(selector);}
@@ -25,17 +25,19 @@ function harness({entries=[],initial=signedOut(),deferInit=false,loadLessons=asy
   // objects before calling the imported host-realm JSON validator.
   const browserSync={...S};
   for(const name of ['validateState','validatePreferences','serialize','fingerprint'])browserSync[name]=value=>S[name](value===undefined?undefined:copy(value));
-  const window={IELTS_ENGINE:E,IELTS_SYNC:browserSync,document,location:{hash:'#library'},VOCAB_HISTORY:[{word:'public-seed-must-never-appear'}],VOCAB_NEW:[],READING_LESSONS:[],
+  const window={IELTS_ENGINE:E,IELTS_SYNC:browserSync,document,location:{hash:'#'+route},VOCAB_HISTORY:[{word:'public-seed-must-never-appear'}],VOCAB_NEW:[],READING_LESSONS:copy(lessons),
     localStorage:{getItem:key=>storage.get(key)||null,setItem:(key,value)=>{if(failStorage)throw Error('quota');storage.set(key,value);}},
     addEventListener:(name,fn)=>events.set(name,fn),setInterval:()=>0,setTimeout:(fn,delay)=>{const id=nextTimer++;timers.set(id,{fn,delay});return id;},clearTimeout:id=>timers.delete(id),
     speechSynthesis:{cancel(){}},IELTS_AUDIO:{stop(){}},scrollTo(){}};
   new Function('window',cloudCode)(window);
   window.IELTS_CLOUD.loadLessons=loadLessons;
-  window.IELTS_CLOUD.create=options=>{const client={options,stopped:false,queued:0,start(){},stop(){this.stopped=true;},queue(){this.queued++;},getConflict(){return null;}};clients.push(client);return client;};
+  window.IELTS_CLOUD.create=options=>{const client={options,stopped:false,queued:0,start(){return startSync(options);},stop(){this.stopped=true;},queue(){this.queued++;},getConflict(){return null;}};clients.push(client);return client;};
   if(!noAuth)window.IELTS_AUTH={consumeCallback:()=>null,create:options=>{authHooks=options;return {getStatus:()=>copy(auth),init:()=>deferInit?init.promise:Promise.resolve(copy(auth)),open(){},logout:async()=>{await options.onBeforeChange();auth=signedOut();options.onStatus(copy(auth));await options.onChange();}};}};
-  const context={window,document,location:window.location,localStorage:window.localStorage,fetch:(...args)=>fetch(...args),Intl,Date,Map,Set,Promise,Error,TypeError,FormData:class{*[Symbol.iterator](){}},clearTimeout:window.clearTimeout,setTimeout:window.setTimeout,setInterval:window.setInterval};
+  const context={window,document,location:window.location,localStorage:window.localStorage,fetch:(...args)=>fetch(...args),Intl,Date,Map,Set,Promise,Error,TypeError,FormData:class{constructor(form){this.values=form?.values||{};}*[Symbol.iterator](){yield* Object.entries(this.values);}get(key){return this.values[key]??null;}},clearTimeout:window.clearTimeout,setTimeout:window.setTimeout,setInterval:window.setInterval};
   vm.runInNewContext(fs.readFileSync(require.resolve('../dist/practice-methods.js'),'utf8'),context);
   vm.runInNewContext(fs.readFileSync(require.resolve('../dist/practice-ui.js'),'utf8'),context);
+  vm.runInNewContext(fs.readFileSync(require.resolve('../dist/reading-ui.js'),'utf8'),context);
+  window.IELTS_READING_UI.bind=()=>{};
   vm.runInNewContext(app,context);
   return {storage,nodes,clients,html:()=>node('#main').innerHTML,modal:()=>node('#modal-content'),latest:()=>clients.at(-1),
     finishInit(status=auth){auth=copy(status);init.resolve(copy(auth));},
@@ -181,4 +183,66 @@ test('integrated spelling checks do not save until confirmation and preserve the
   const event=h.latest().options.getState().records[0].reviewHistory[0];
   assert.equal(event.kind,'studied','first learning is confirmed without claiming mastery');
   assert.match(event.answer,/看义拼词/);assert.match(event.answer,/resilience/);
+});
+
+function readingLessons(){const scope={window:{}};vm.runInNewContext(fs.readFileSync(require.resolve('../dist/reading-data.js'),'utf8'),scope);return copy(scope.window.READING_LESSONS);}
+
+test('daily reading waits for the account and initial catalog instead of flashing and assigning another lesson',async()=>{
+  const sync=deferred(),catalog=deferred(),lessons=readingLessons();
+  const h=harness({initial:signedIn('A'),deferInit:true,route:'reading',lessons,startSync:()=>sync.promise,loadLessons:()=>catalog.promise});
+  assert.match(h.html(),/正在加载今日精读/);assert.doesNotMatch(h.html(),/ru-passage-article/);
+  h.finishInit();await settle();
+  assert.match(h.html(),/正在加载今日精读/);
+  assert.deepEqual(copy(h.latest().options.getState().readingState.assignments),{});
+  assert.equal(h.latest().queued,0);
+  const remote=empty();remote.readingState.assignments[E.today()]='teacher-communication';
+  h.latest().options.setState(remote);sync.resolve();await settle();
+  assert.match(h.html(),/正在加载今日精读/);
+  catalog.resolve([]);await settle();
+  assert.match(h.html(),/Positive teacher communication/);
+  assert.doesNotMatch(h.html(),/How urban design leads to better wellness/);
+  assert.deepEqual(copy(h.latest().options.getState().readingState.assignments),remote.readingState.assignments);
+  assert.equal(h.latest().queued,0,'loading existing reading never creates a new assignment or learning result');
+});
+
+test('an open daily reading refreshes when its assigned cloud lesson finishes loading',async()=>{
+  const catalog=deferred(),lessons=readingLessons(),online={...lessons[0],id:'cloud-only-reading',title:'Assigned cloud reading'};
+  const state=empty();state.readingState.assignments[E.today()]=online.id;
+  const h=harness({initial:signedIn('A'),route:'reading',lessons,entries:[stored('A',state)],loadLessons:()=>catalog.promise});await settle();
+  assert.match(h.html(),/正在加载今日精读/);
+  catalog.resolve([online]);await settle();
+  assert.match(h.html(),/Assigned cloud reading/);assert.match(h.html(),/ru-passage-article/);
+  assert.ok(h.html().includes(online.article.paragraphs[0].text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')));
+});
+
+test('an older same-source custom lesson cannot erase a bundled full passage during cloud state download',async()=>{
+  const lessons=readingLessons(),legacy=copy(lessons[0]);delete legacy.article;
+  for(const question of legacy.questions){delete question.locator;delete question.evidenceParagraphIds;question.location='Original article';}
+  const initial=empty();initial.readingState.assignments[E.today()]=legacy.id;
+  const h=harness({initial:signedIn('A'),route:'reading',lessons,entries:[stored('A',initial)]});await settle();
+  assert.match(h.html(),/ru-passage-article/);
+  const remote=copy(initial);remote.customLessons=[legacy];h.latest().options.setState(remote);
+  assert.match(h.html(),/ru-passage-article/);assert.doesNotMatch(h.html(),/<iframe/);
+  assert.ok(h.html().includes(lessons[0].article.paragraphs[0].text));
+  assert.equal(h.latest().options.getState().customLessons[0].article,undefined,'display fallback does not rewrite the personal backup');
+});
+
+test('a same-id lesson for a different source never borrows another article',async()=>{
+  const lessons=readingLessons(),changed=copy(lessons[0]);delete changed.article;changed.url='https://example.test/different-article';
+  for(const question of changed.questions){delete question.locator;delete question.evidenceParagraphIds;question.location='Original article';}
+  const state=empty();state.customLessons=[changed];state.readingState.assignments[E.today()]=changed.id;
+  const h=harness({initial:signedIn('A'),route:'reading',lessons,entries:[stored('A',state)]});await settle();
+  assert.doesNotMatch(h.html(),/ru-passage-article|<iframe/);
+  assert.match(h.html(),/https:\/\/example.test\/different-article/);
+});
+
+test('catalog loading preserves answers in a manually opened reading form',async()=>{
+  const catalog=deferred(),lessons=readingLessons();
+  const h=harness({initial:signedIn('A'),lessons,loadLessons:()=>catalog.promise});await settle();
+  await h.click('choose-lesson',{id:'urban-health'});
+  await h.route('reading');
+  h.node('#reading-form').values={u5:'draft before loading finished'};
+  catalog.resolve([]);await settle();
+  assert.match(h.html(),/value="draft before loading finished"/);
+  assert.deepEqual(copy(h.latest().options.getState().readingState.results),{},'draft never becomes a submitted result');
 });

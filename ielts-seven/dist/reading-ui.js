@@ -54,7 +54,7 @@
 
   function passage(lesson, showAnswers) {
     const article = lesson.article;
-    if (!article?.paragraphs?.length) return `<div class="ru-embedded-source"><iframe src="${url(lesson.url)}" title="Original article: ${esc(lesson.title)}" loading="lazy" referrerpolicy="no-referrer" sandbox="allow-scripts allow-same-origin allow-popups"></iframe><p>Original article hosted by ${esc(lesson.source)}. <a href="${url(lesson.url)}" target="_blank" rel="noopener noreferrer">Open source</a></p></div>`;
+    if (!article?.paragraphs?.length) return `<article class="ru-source-card"><span class="ru-source-kicker" lang="en">READ AT THE SOURCE</span><h3 lang="en">${esc(lesson.title)}</h3><p class="ru-source-meta">${esc(lesson.source)} · ${esc(lesson.published)}</p><p>本课程保留原文链接，请在来源网站阅读完整文章。打开原文后，可返回本页继续作答。</p><a class="button outline" href="${url(lesson.url)}" target="_blank" rel="noopener noreferrer">打开原文 ↗</a></article>`;
     const sourceLink = `<a href="${url(lesson.url)}" target="_blank" rel="noopener noreferrer">${esc(lesson.source)}</a>`;
     const author = String(article.author || '');
     const credit = author.endsWith(` | ${lesson.source}`) ? `${esc(author.slice(0, -lesson.source.length))}${sourceLink}` : `${author ? `${esc(author)} · ` : ''}${sourceLink}`;

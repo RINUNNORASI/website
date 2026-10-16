@@ -61,7 +61,7 @@ test('magic-link PKCE callback hands separate cookies through the real Node HTTP
     SUPABASE_PUBLISHABLE_KEY: 'sb_publishable_' + 'a'.repeat(32),
     SESSION_ENCRYPTION_KEY: Buffer.alloc(32, 9).toString('base64')};
   const providerCalls = [];
-  let challenge;
+  let challenge; let loginState;
   t.mock.method(globalThis, 'fetch', async (url, options) => {
     const address = new URL(url);
     assert.equal(address.origin, env.SUPABASE_URL);
@@ -71,7 +71,10 @@ test('magic-link PKCE callback hands separate cookies through the real Node HTTP
     providerCalls.push(address.pathname);
     if (address.pathname === '/auth/v1/otp') {
       assert.equal(options.method, 'POST');
-      assert.equal(address.searchParams.get('redirect_to'), PUBLIC_ORIGIN + '/');
+      const redirect = new URL(address.searchParams.get('redirect_to'));
+      assert.equal(redirect.origin + redirect.pathname, PUBLIC_ORIGIN + '/');
+      assert.equal(redirect.search, ''); loginState = new URLSearchParams(redirect.hash.slice(1)).get('email-login-state');
+      assert.match(loginState, /^[A-Za-z0-9_-]{43}$/);
       assert.equal(payload.email, EMAIL);
       assert.equal(payload.code_challenge_method, 's256');
       assert.match(payload.code_challenge, /^[A-Za-z0-9_-]{43}$/);
@@ -112,16 +115,35 @@ test('magic-link PKCE callback hands separate cookies through the real Node HTTP
   assert.match(loginHeader, /^__Host-xunci-login=[A-Za-z0-9_-]{43}; Path=\/; HttpOnly; Secure; SameSite=Lax; Max-Age=900$/);
   const loginCookie = loginHeader.split(';')[0];
 
-  const callback = await request(port, {path: '/?code=' + AUTH_CODE, headers: {Cookie: loginCookie}});
-  assert.equal(callback.status, 303);
-  assert.equal(callback.headers.location, '/?email-login=success#settings');
+  const callback = await request(port, {path: '/?code=' + AUTH_CODE});
+  assert.equal(callback.status, 200);
   assert.equal(callback.headers['cache-control'], 'private, no-store');
   assert.equal(callback.headers['referrer-policy'], 'no-referrer');
-  assert.equal(callback.body, '');
-  const cookies = callback.headers['set-cookie'];
-  assert.ok(Array.isArray(cookies));
-  assert.equal(cookies.length, 2);
-  assert.ok(cookies.some(value => /^__Host-xunci-login=; Path=\/; HttpOnly; Secure; SameSite=Lax; Max-Age=0$/.test(value)));
+  assert.equal(callback.headers['set-cookie'], undefined);
+  assert.ok(callback.body.includes('history.replaceState'));
+  assert.ok(!callback.body.includes(AUTH_CODE)); assert.ok(!callback.body.includes(loginState));
+  assert.equal(db.sqlite.prepare('SELECT COUNT(*) AS count FROM auth_sessions').get().count, 0);
+
+  // Browser 2 has no initiating cookie. It transfers the fragment to a strict
+  // same-origin POST, then accepts the displayed verified email explicitly.
+  const received = await request(port, {path: '/api/auth/magic-callback', method: 'POST',
+    headers: {Origin: PUBLIC_ORIGIN, 'Content-Type': 'application/json'}, body: JSON.stringify({code: AUTH_CODE, state: loginState})});
+  assert.equal(received.status, 200); assert.deepEqual(JSON.parse(received.body), {ready: true});
+  assert.equal(received.headers['set-cookie'].length, 1);
+  const confirmationHeader = received.headers['set-cookie'][0];
+  assert.match(confirmationHeader, /^__Host-xunci-confirm=[A-Za-z0-9_-]{43}; Path=\/; HttpOnly; Secure; SameSite=Lax; Max-Age=300$/);
+  const confirmationCookie = confirmationHeader.split(';')[0];
+  const form = await request(port, {path: '/api/auth/magic-confirm', headers: {Cookie: confirmationCookie}});
+  assert.equal(form.status, 200); assert.ok(form.body.includes(EMAIL));
+  const csrf = /name="csrf" value="([A-Za-z0-9_-]{43})"/.exec(form.body)[1];
+  assert.equal(db.sqlite.prepare('SELECT COUNT(*) AS count FROM auth_sessions').get().count, 0);
+  const confirmed = await request(port, {path: '/api/auth/magic-confirm', method: 'POST',
+    headers: {Cookie: confirmationCookie, Origin: PUBLIC_ORIGIN, 'Content-Type': 'application/x-www-form-urlencoded'},
+    body: new URLSearchParams({csrf, decision: 'confirm'}).toString()});
+  assert.equal(confirmed.status, 303); assert.equal(confirmed.headers.location, '/?email-login=success#settings');
+  assert.equal(confirmed.body, '');
+  const cookies = confirmed.headers['set-cookie']; assert.ok(Array.isArray(cookies)); assert.equal(cookies.length, 2);
+  assert.ok(cookies.some(value => /^__Host-xunci-confirm=; Path=\/; HttpOnly; Secure; SameSite=Lax; Max-Age=0$/.test(value)));
   const sessionHeader = cookies.find(value => value.startsWith('__Host-xunci-session='));
   assert.match(sessionHeader, /^__Host-xunci-session=[A-Za-z0-9_-]{43}; Path=\/; HttpOnly; Secure; SameSite=Lax; Max-Age=2592000$/);
   const sessionCookie = sessionHeader.split(';')[0];
@@ -132,20 +154,20 @@ test('magic-link PKCE callback hands separate cookies through the real Node HTTP
   assert.equal(state.authenticated, true);
   assert.deepEqual(state.user, {id: `email:supabase:${PROJECT}:${USER_ID}`, email: EMAIL});
   assert.equal(session.headers['set-cookie'], undefined);
-  assert.deepEqual(providerCalls, ['/auth/v1/otp', '/auth/v1/token', '/auth/v1/user', '/auth/v1/user']);
+  assert.deepEqual(providerCalls, ['/auth/v1/otp', '/auth/v1/token', '/auth/v1/user', '/auth/v1/user', '/auth/v1/user']);
   assert.equal(db.sqlite.prepare('SELECT COUNT(*) AS count FROM auth_pending_logins').get().count, 0);
   assert.equal(db.sqlite.prepare('SELECT COUNT(*) AS count FROM auth_sessions').get().count, 1);
 
-  const replay = await request(port, {path: '/?code=' + AUTH_CODE, headers: {Cookie: loginCookie}});
-  assert.equal(replay.status, 303);
-  assert.equal(replay.headers.location, '/?email-login=expired&email-login-reason=pending_unavailable#settings');
-  assert.equal(replay.headers['set-cookie'].length, 1);
-  assert.ok(replay.headers['set-cookie'][0].startsWith('__Host-xunci-login=;'));
+  const replay = await request(port, {path: '/api/auth/magic-callback', method: 'POST',
+    headers: {Origin: PUBLIC_ORIGIN, 'Content-Type': 'application/json'}, body: JSON.stringify({code: AUTH_CODE, state: loginState})});
+  assert.equal(replay.status, 400);
+  assert.deepEqual(JSON.parse(replay.body), {error: 'magic_link_expired', reason: 'pending_unavailable'});
+  assert.equal(replay.headers['set-cookie'], undefined);
   assert.equal(providerCalls.filter(value => value === '/auth/v1/token').length, 1);
   assert.equal(db.sqlite.prepare('SELECT COUNT(*) AS count FROM auth_sessions').get().count, 1);
   assert.equal(warnings.length, 1);
   assert.deepEqual(JSON.parse(warnings[0][0]), {event: 'email_magic_callback', outcome: 'failed', reason: 'pending_unavailable'});
-  for (const value of [AUTH_CODE, ACCESS_TOKEN, EMAIL, loginCookie, sessionCookie, challenge]) {
+  for (const value of [AUTH_CODE, ACCESS_TOKEN, EMAIL, loginCookie, confirmationCookie, csrf, sessionCookie, challenge, loginState]) {
     assert.equal(JSON.stringify(warnings).includes(value), false);
   }
 });

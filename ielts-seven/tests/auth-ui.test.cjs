@@ -362,7 +362,9 @@ test('magic link login pauses before sending and shows an email link instead of 
   assert.equal(h.dialog().querySelector('#email-auth-code'), null);
   assert.equal(h.dialog().querySelector('#email-auth-verify'), null);
   assert.match(h.dialog().innerHTML, /点击邮件中的登录链接/);
-  assert.match(h.dialog().innerHTML, /发起登录的浏览器/);
+  assert.match(h.dialog().innerHTML, /你希望登录的浏览器/);
+  assert.match(h.dialog().innerHTML, /核对页面显示的邮箱，再确认登录/);
+  assert.match(h.dialog().innerHTML, /不同浏览器需要分别登录/);
   assert.equal(h.dialog().querySelector('#email-auth-resend').disabled, true);
   await h.click('close');
   assert.deepEqual(h.changed, [{reason: 'cancel', user: null}]);
@@ -491,15 +493,15 @@ test('failed callback stays visible after initialization and needs an explicit a
   assert.equal(state.status, 'callback-error');
   assert.equal(h.dialog().open, true);
   assert.match(h.dialog().innerHTML, /登录尚未完成/);
-  assert.match(h.dialog().innerHTML, /没有找到发起登录时的浏览器记录/);
-  assert.match(h.dialog().innerHTML, /邮箱内置浏览器/);
+  assert.match(h.dialog().innerHTML, /旧格式登录链接缺少原浏览器记录/);
+  assert.match(h.dialog().innerHTML, /其他浏览器核对邮箱并确认登录/);
   assert.equal(h.pageUrl(), 'https://xunci.example.test/?lang=zh#settings');
   assert.deepEqual(h.replacements, ['/?lang=zh#settings']);
   assert.equal(h.cloudRunning(), false);
   assert.equal(h.changed.length, 0);
   assert.deepEqual(h.calls.map(call => call.url), ['/api/auth/config', '/api/auth/session']);
   await h.runTimer(1000); await h.ui.open();
-  assert.match(h.dialog().innerHTML, /没有找到发起登录时的浏览器记录/);
+  assert.match(h.dialog().innerHTML, /旧格式登录链接缺少原浏览器记录/);
   h.input('email-auth-email', 'learner@example.test'); await h.submit('email');
   assert.equal(h.ui.getStatus().status, 'link-sent');
   assert.equal(h.calls.filter(call => call.url === '/api/auth/otp').length, 1);
@@ -584,7 +586,7 @@ test('a success marker is checked against the real server session and reports a 
   assert.equal(h.ui.getStatus().authenticated, false);
   assert.equal(h.ui.getStatus().status, 'callback-error');
   assert.match(h.dialog().innerHTML, /邮箱验证后未能保持登录状态/);
-  assert.match(h.dialog().innerHTML, /允许此网站使用 Cookie/);
+  assert.match(h.dialog().innerHTML, /允许当前浏览器使用此网站的 Cookie/);
   assert.equal(h.cloudRunning(), false);
   assert.equal(h.calls.some(call => call.method === 'POST'), false);
 });
@@ -602,4 +604,31 @@ test('a successful callback still uses the server identity and leaves normal acc
   assert.equal(h.pageUrl(), 'https://xunci.example.test/#settings');
   assert.equal(h.before.length, 0);
   assert.equal(h.calls.some(call => call.method === 'POST'), false);
+});
+
+test('cancelling a receiving-browser confirmation keeps the existing account and clears the callback marker', async () => {
+  const h=harness(async path=>{
+    if(path==='config')return reply({enabled:true,loginMethod:'magic-link'});
+    if(path==='session')return reply(signedIn(false));
+    assert.fail(path);
+  },{pageUrl:'https://xunci.example.test/?email-login=cancelled#settings'});
+  await h.ui.init();
+  assert.equal(h.ui.getStatus().authenticated,true);
+  assert.notEqual(h.ui.getStatus().status,'callback-error');
+  assert.equal(h.pageUrl(),'https://xunci.example.test/#settings');
+  assert.equal(h.calls.some(call=>call.method==='POST'),false);
+});
+
+test('cross-browser confirmation failures use fixed recovery copy without a same-browser requirement',async()=>{
+  for(const [reason,message] of [['confirmation_expired',/五分钟内确认邮箱/],['login_context_changed',/已保留当前账号/]]){
+    const h=harness(async path=>{
+      if(path==='config')return reply({enabled:true,loginMethod:'magic-link'});
+      if(path==='session')return reply(signedOut());
+      assert.fail(path);
+    },{pageUrl:'https://xunci.example.test/?email-login=expired&email-login-reason='+reason+'#settings'});
+    await h.ui.init();
+    assert.equal(h.ui.getStatus().status,'callback-error');assert.match(h.dialog().innerHTML,message);
+    assert.doesNotMatch(h.dialog().innerHTML,/同一浏览器|原浏览器重新发送/);
+    assert.equal(h.pageUrl(),'https://xunci.example.test/#settings');
+  }
 });
