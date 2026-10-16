@@ -8,7 +8,7 @@ const app=fs.readFileSync(require.resolve('../dist/app.js'),'utf8');
 const cloudCode=fs.readFileSync(require.resolve('../dist/cloud-client.js'),'utf8');
 const copy=value=>JSON.parse(JSON.stringify(value));
 const empty=()=>S.validateState({records:[],lastExcel:E.today(),readingState:{assignments:{},results:{},completed:{},excluded:[]},customLessons:[]});
-const withWord=word=>S.validateState({...empty(),records:E.seed([{word,firstSeen:E.today(),level:'A',meaning:'个人词义',ipa:'/test/',pos:'n.'}])});
+const withWord=(word,firstSeen=E.today())=>S.validateState({...empty(),records:E.seed([{word,firstSeen,level:'A',meaning:'个人词义',ipa:'/test/',pos:'n.'}])});
 const signedIn=id=>({status:'signed-in',enabled:true,authenticated:true,user:{id,email:id+'@example.test'}});
 const signedOut=()=>({status:'signed-out',enabled:true,authenticated:false,user:null});
 const cacheKey=id=>'xunci.cloud.v1.state.'+encodeURIComponent(id);
@@ -34,6 +34,8 @@ function harness({entries=[],initial=signedOut(),deferInit=false,loadLessons=asy
   window.IELTS_CLOUD.create=options=>{const client={options,stopped:false,queued:0,start(){},stop(){this.stopped=true;},queue(){this.queued++;},getConflict(){return null;}};clients.push(client);return client;};
   if(!noAuth)window.IELTS_AUTH={consumeCallback:()=>null,create:options=>{authHooks=options;return {getStatus:()=>copy(auth),init:()=>deferInit?init.promise:Promise.resolve(copy(auth)),open(){},logout:async()=>{await options.onBeforeChange();auth=signedOut();options.onStatus(copy(auth));await options.onChange();}};}};
   const context={window,document,location:window.location,localStorage:window.localStorage,fetch:(...args)=>fetch(...args),Intl,Date,Map,Set,Promise,Error,TypeError,FormData:class{*[Symbol.iterator](){}},clearTimeout:window.clearTimeout,setTimeout:window.setTimeout,setInterval:window.setInterval};
+  vm.runInNewContext(fs.readFileSync(require.resolve('../dist/practice-methods.js'),'utf8'),context);
+  vm.runInNewContext(fs.readFileSync(require.resolve('../dist/practice-ui.js'),'utf8'),context);
   vm.runInNewContext(app,context);
   return {storage,nodes,clients,html:()=>node('#main').innerHTML,modal:()=>node('#modal-content'),latest:()=>clients.at(-1),
     finishInit(status=auth){auth=copy(status);init.resolve(copy(auth));},
@@ -41,6 +43,7 @@ function harness({entries=[],initial=signedOut(),deferInit=false,loadLessons=asy
     async before(){return authHooks.onBeforeChange();},
     status(status){auth=copy(status);authHooks.onStatus(copy(auth));},setStorageFailure(value){failStorage=value;},
     async click(action,dataset={}){await events.get('click')({target:{closest:()=>({dataset:{action,...dataset}})}});await settle();},
+    input(value){events.get('input')({target:{dataset:{practiceInput:'answer'},value}});},
     async route(name){window.location.hash='#'+name;events.get('hashchange')();await settle();},node,
   };
 }
@@ -144,4 +147,38 @@ test('pending save status is visible and cannot be labeled synced',async()=>{
   h.latest().options.onStatus({status:'pending',message:'新修改已在本机保存，等待上传。',user:{id:'A'}});
   assert.equal(h.node('#sync-label').textContent,'待同步');
   assert.equal(h.node('#sidebar-sync-label').textContent,'待同步');
+});
+
+test('the integrated practice page records only explicit confirmation into the verified account cache',async()=>{
+  const original=withWord('private-practice-word',E.addDays(E.today(),-1));
+  const h=harness({initial:signedIn('A'),entries:[stored('A',original)]});await settle();
+  await h.route('review');
+  assert.match(h.html(),/八种方式/);
+  assert.equal(h.latest().options.getState().records[0].reviewHistory.length,0);
+  await h.click('practice-start');
+  assert.match(h.html(),/private-practice-word/);
+  assert.equal(h.latest().options.getState().records[0].reviewHistory.length,0);
+  await h.click('practice-studied');
+  const own=h.latest().options.getState().records[0];
+  assert.equal(own.reviewHistory.length,1);
+  assert.equal(own.reviewHistory[0].kind,'studied');
+  assert.match(own.reviewHistory[0].answer,/讲解学习/);
+  assert.equal(h.latest().queued,1);
+  await h.change(signedIn('B'));await h.route('review');
+  assert.doesNotMatch(h.html(),/private-practice-word/);
+  await h.click('practice-studied');
+  assert.equal(h.latest().options.getState().records.length,0);
+  assert.equal(JSON.parse(h.storage.get(cacheKey('A'))).state.records[0].reviewHistory.length,1);
+});
+
+test('integrated spelling checks do not save until confirmation and preserve the actual method and typed answer',async()=>{
+  const original=withWord('resilience',E.addDays(E.today(),-1));
+  const h=harness({initial:signedIn('A'),entries:[stored('A',original)]});await settle();
+  await h.route('review');await h.click('practice-mode',{mode:'spelling'});await h.click('practice-start');
+  h.input('resilience');await h.click('practice-check');
+  assert.equal(h.latest().options.getState().records[0].reviewHistory.length,0);
+  await h.click('practice-finish');
+  const event=h.latest().options.getState().records[0].reviewHistory[0];
+  assert.equal(event.kind,'studied','first learning is confirmed without claiming mastery');
+  assert.match(event.answer,/看义拼词/);assert.match(event.answer,/resilience/);
 });
