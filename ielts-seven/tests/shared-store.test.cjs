@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const {DatabaseSync} = require('node:sqlite');
+const {randomBytes} = require('node:crypto');
 const E = require('../dist/engine.js');
 const S = require('../dist/sync-state.js');
 globalThis.IELTS_ENGINE = E;
@@ -321,4 +322,52 @@ test('backup failures and provider SQL errors fail closed without exposing raw d
   });
   assert.equal(rows(db, 'learning_state').length, 0);
   assert.equal(rows(db, 'sync_account_links').length, 0);
+});
+
+test('signed shared-D1 transport stages backups, applies CAS and catalog batches, and resolves the resulting owner link', async t => {
+  const {module, legacy, db, env} = await setup(t);
+  const {createSharedD1Client, createSharedD1Handler} = await import('../runtime/shared-d1.mjs');
+  const secret = randomBytes(32).toString('hex');
+  const handler = createSharedD1Handler({db, secret});
+  const requests = [];
+  const client = createSharedD1Client({endpoint: 'https://shared.example.test', secret,
+    fetchImpl: async (url, options) => {
+      const req = new Request(url, options);
+      requests.push(req.clone());
+      return handler(req);
+    }});
+  const linkedEnv = {...env, DB: client};
+  save(legacy, USER.id, state(['resilience', 'balance']), 4);
+  save(db, 'email-owner', state(['resilience', 'renewal']), 8);
+  lesson(legacy, 'migrated-lesson', '2026-10-02');
+  card(legacy, 'balance');
+
+  const staged = await module.prepareSharedIdentity(request(), linkedEnv, USER);
+  assert.equal(staged.report.phase, 'preview');
+  assert.deepEqual(staged.report.counts, {source: 2, target: 2, combined: 3});
+  assert.equal(rows(db, 'sync_legacy_backups').length, 4);
+  assert.equal(rows(db, 'sync_account_links').length, 0);
+  assert.equal(rows(db, 'learning_state')[0].revision, 8);
+  assert.equal(rows(db, 'lessons').length, 0);
+
+  const applied = await module.prepareSharedIdentity(request(), {...linkedEnv, SHARED_MIGRATION_APPLY: '1'}, USER);
+  assert.equal(applied.report.phase, 'applied');
+  assert.equal(applied.report.targetRevision, 9);
+  assert.deepEqual(applied.user, {id: 'email-owner', email: 'learner@example.test'});
+  const target = await client.prepare('SELECT revision, payload_json FROM learning_state WHERE user_id = ?')
+    .bind('email-owner').first();
+  assert.equal(target.revision, 9);
+  assert.deepEqual(JSON.parse(target.payload_json).records.map(record => record.word), ['resilience', 'renewal', 'balance']);
+  assert.equal(rows(db, 'lessons')[0].id, 'migrated-lesson');
+  assert.equal(rows(db, 'word_cards')[0].word, 'balance');
+  assert.deepEqual(await module.resolveSharedIdentity(request(), linkedEnv, USER), applied.user);
+  assert.equal(rows(legacy, 'learning_state')[0].revision, 4, 'the native source stays untouched');
+  assert.equal(rows(db, 'sync_legacy_backups').length, 4, 'the apply retry preserves the same original backups');
+
+  const envelopes = await Promise.all(requests.map(req => req.clone().json()));
+  assert.ok(envelopes.some(value => value.batch && value.queries.length === 2), 'catalog writes traverse the real signed batch protocol');
+  assert.ok(envelopes.some(value => value.queries.some(query => query.sql.startsWith('UPDATE learning_state'))));
+  assert.ok(envelopes.some(value => value.queries.some(query => query.sql.startsWith('INSERT INTO sync_account_links'))));
+  assert.ok(requests.every(req => /^[a-f0-9]{64}$/.test(req.headers.get('X-Xunci-D1-Signature'))));
+  assert.equal(new Set(requests.map(req => req.headers.get('X-Xunci-D1-Nonce'))).size, requests.length);
 });
