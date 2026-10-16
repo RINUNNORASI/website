@@ -294,8 +294,20 @@ async function readWordCards(db) {
 
 async function wordCards(request, env) {
   if (!['GET', 'POST'].includes(request.method)) return json({error: 'method_not_allowed'}, 405, {Allow: 'GET, POST'});
+  if (request.method === 'GET') {
+    const emailAuth = globalThis.XUNCI_EMAIL_AUTH.config(env)
+      ? await globalThis.XUNCI_EMAIL_AUTH.identity(request, env) : null;
+    const user = emailAuth ? emailAuth.user : identity(request);
+    const db = database(env);
+    const snapshot = await readState(db, user);
+    const ownWords = new Set((snapshot.state?.records || []).map(record => record.word));
+    // Teaching content can enrich words this account already owns without
+    // publishing another learner's vocabulary list or adding words to a new account.
+    if (!ownWords.size) return json({version: 1, cards: []});
+    const catalog = await readWordCards(db);
+    return json({version: 1, cards: catalog.cards.filter(card => ownWords.has(card.word))});
+  }
   const db = database(env);
-  if (request.method === 'GET') return json(await readWordCards(db));
   requireEditor(request, env);
   sameOrigin(request, false);
   if (request.headers.get('X-Xunci-Lesson-Writer') !== '1') throw new RequestError(403, 'lesson_writer_required');
@@ -442,7 +454,7 @@ async function mcp(request, env) {
     } else if (rpc.params.name === 'get_learning_summary') {
       envelope(args, []); result = await learningSummary(database(env), user, env);
     } else if (rpc.params.name === 'get_word_cards') {
-      envelope(args, []); result = await readWordCards(database(env));
+      envelope(args, []); requireEditor(request, env); result = await readWordCards(database(env));
     } else if (rpc.params.name === 'publish_reading_lesson') {
       envelope(args, ['lesson']);
       const response = await dailyLessons(editorRequest(request, '/api/lessons', args), env);

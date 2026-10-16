@@ -12,11 +12,15 @@ for (const name of ['engine.js', 'vocab-history.js', 'vocab-new.js', 'frequency-
 const C = context.window.IELTS_CLASSIFY;
 const F = context.window.IELTS_FREQUENCY;
 
-test('all confirmed history classifications survive seed matching and corrected forms', () => {
+test('public bootstrap contains no personal vocabulary or confirmed history', () => {
   const rows = [...context.window.VOCAB_HISTORY, ...context.window.VOCAB_NEW];
-  assert.ok(rows.length >= 157);
+  assert.equal(rows.length, 0);
+});
+
+test('a signed-in learner\'s explicit classifications survive suggestions without mutating records', () => {
+  const rows = [{word: 'architecture', level: 'B'}, {word: 'illustrate', level: 'C'}];
   const before = JSON.stringify(rows);
-  for (const record of rows) assert.equal(C.suggest(record.word).level, record.level, record.word);
+  for (const record of rows) assert.equal(C.suggest(record.word, {records: rows}).level, record.level, record.word);
   assert.equal(C.suggest('Stratosphenic').level, 'B');
   assert.equal(C.suggest('drought(s)').level, 'A');
   assert.equal(JSON.stringify(rows), before);

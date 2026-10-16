@@ -384,12 +384,53 @@ test('MCP can publish/read daily lessons and cards while keeping personal learni
   const get = await mcpCall(db, 'get_word_cards');
   assert.deepEqual(get.data.cards, [card()]);
   const api = await (await run(db, request('GET', undefined, {path: '/api/word-cards'}))).json();
-  assert.deepEqual(api.cards, [card()]);
+  assert.deepEqual(api.cards, []);
   const empty = await mcpCall(db, 'get_learning_summary');
   assert.equal(empty.data.hasCloudState, false);
   assert.equal(empty.data.vocabulary.total, 0);
   assert.equal(empty.data.reading.latestActualAnswers, null);
   assert.equal((await (await run(db, request())).json()).revision, 0);
+});
+
+test('word card reads disclose only the current account vocabulary and leave every saved state intact', async t => {
+  const db = new FakeD1(); t.after(() => db.close());
+  await mcpCall(db, 'publish_word_cards', {cards: [card(), card('manage'), card('resident')]});
+  const original = S.validateState(state([E.review(word(), {kind: 'studied', date: '2026-10-15'})]));
+  const second = S.validateState(state([word('manage')]));
+  const insert = db.sqlite.prepare('INSERT INTO learning_state (user_id, revision, payload_json, updated_at) VALUES (?, ?, ?, ?)');
+  insert.run('account-one', 7, JSON.stringify(original), '2026-10-15T00:00:00.000Z');
+  insert.run('account-two', 3, JSON.stringify(second), '2026-10-15T00:00:00.000Z');
+  const before = db.sqlite.prepare('SELECT * FROM learning_state ORDER BY user_id').all();
+  for (const [user, expected] of [['account-one', [card()]], ['account-two', [card('manage')]], ['new-account', []]]) {
+    const response = await run(db, request('GET', undefined, {path: '/api/word-cards', user}));
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get('Cache-Control'), 'private, no-store');
+    assert.deepEqual(await response.json(), {version: 1, cards: expected});
+  }
+  assert.deepEqual(db.sqlite.prepare('SELECT * FROM learning_state ORDER BY user_id').all(), before);
+  assert.equal(db.sqlite.prepare('SELECT COUNT(*) AS n FROM word_cards').get().n, 3);
+});
+
+test('anonymous word card reads reject before querying a vocabulary or learning-state table', async () => {
+  let queries = 0;
+  const db = {prepare() { queries++; throw new Error('should not query private records'); }};
+  const response = await run(db, request('GET', undefined, {path: '/api/word-cards',
+    headers: {'oai-authenticated-user-id': null}}));
+  assert.equal(response.status, 401);
+  assert.equal((await response.json()).error, 'authentication_required');
+  assert.equal(queries, 0);
+});
+
+test('only the configured editor can read the complete word-card catalog through MCP', async t => {
+  const db = new FakeD1(); t.after(() => db.close());
+  await mcpCall(db, 'publish_word_cards', {cards: [card(), card('manage')]});
+  const editor = await mcpCall(db, 'get_word_cards');
+  assert.equal(editor.rpc.result.isError, false);
+  assert.deepEqual(editor.data.cards, [card('manage'), card()]);
+  const reader = await mcpCall(db, 'get_word_cards', {}, {user: 'account-two',
+    headers: {'oai-authenticated-user-email': 'reader@example.com'}});
+  assert.equal(reader.rpc.result.isError, true);
+  assert.deepEqual(reader.data, {error: 'editor_required'});
 });
 
 test('word cards reject personal states, missing content, unsafe sources and canonical duplicates atomically', async t => {

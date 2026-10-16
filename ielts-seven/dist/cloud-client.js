@@ -2,11 +2,79 @@
 (function (root) {
   'use strict';
   const META_KEY = 'xunci.cloud.v1';
+  const LEGACY_STATE_KEY = 'xunci.ielts7.v1';
+  const LEGACY_ARCHIVE_KEY = META_KEY + '.unassigned.v1';
   const copy = value => value == null ? value : JSON.parse(JSON.stringify(value));
   const accountKey = id => META_KEY + '.account.' + encodeURIComponent(id);
+  const stateKey = id => META_KEY + '.state.' + encodeURIComponent(id);
+  const metadataKey = id => META_KEY + '.metadata.' + encodeURIComponent(id);
+  const validUserId = id => typeof id === 'string' && !!id && id.length <= 256;
+  let recoverySequence = 0;
+
+  function preserveSnapshot(key, snapshot) {
+    const previous = root.localStorage.getItem(key);
+    if (previous) {
+      try {
+        const saved = JSON.parse(previous);
+        if (saved.userId === snapshot.userId
+          && root.IELTS_SYNC.fingerprint(saved.state) === root.IELTS_SYNC.fingerprint(snapshot.state)) return;
+      } catch (_) { /* Keep even a damaged older backup intact for recovery. */ }
+      // Switching away again must not replace an earlier backup. A distinct,
+      // immutable recovery entry preserves each different snapshot.
+      const prefix = key + '.recovery.' + Date.now().toString(36) + '.';
+      do {key = prefix + (++recoverySequence).toString(36);} while (root.localStorage.getItem(key));
+    }
+    root.localStorage.setItem(key, JSON.stringify(snapshot));
+  }
 
   class ServiceError extends Error {
     constructor(status, message) { super(message); this.status = status; }
+  }
+
+  // A browser can be shared by several people. Never display the old shared
+  // cache until its owner has been authenticated, and never claim an unowned
+  // legacy snapshot for whichever email signs in next.
+  function createAccountCache(options) {
+    const S = root.IELTS_SYNC;
+    if (!S || typeof options?.makeInitialState !== 'function') throw new Error('账户缓存需要初始状态配置。');
+    const empty = () => S.validateState(options.makeInitialState());
+    const parse = key => JSON.parse(root.localStorage.getItem(key) || 'null');
+    try {
+      const saved = parse(LEGACY_STATE_KEY);
+      if (saved) {
+        const state = S.validateState(saved), meta = parse(META_KEY);
+        if (validUserId(meta?.userId)) {
+          // Existing account snapshots may be newer than this retired shared
+          // key. Preserve them, as well as the original shared cache itself.
+          if (!root.localStorage.getItem(stateKey(meta.userId))) {
+            root.localStorage.setItem(stateKey(meta.userId), JSON.stringify({version: 1,
+              userId: meta.userId, revision: Number.isSafeInteger(meta.revision) ? meta.revision : 0,
+              baseline: meta.baseline ?? null, state, savedAt: new Date().toISOString()}));
+          }
+        } else {
+          preserveSnapshot(LEGACY_ARCHIVE_KEY, {version: 1,
+            state, savedAt: new Date().toISOString()});
+        }
+      }
+    } catch (_) { throw new Error('无法隔离保存原有本机记录，已暂停个人记录加载；原记录仍保留。'); }
+    return {
+      read(userId) {
+        if (!validUserId(userId)) return empty();
+        try {
+          const saved = parse(stateKey(userId)) || parse(accountKey(userId));
+          if (saved) {
+            if (saved.version !== 1 || saved.userId !== userId) throw new Error('账户归属无效');
+            return S.validateState(saved.state);
+          }
+        } catch (_) { throw new Error('当前账户的本机记录未通过校验，已暂停加载并保留原记录。'); }
+        return empty();
+      },
+      write(userId, state) {
+        if (!validUserId(userId)) throw new Error('登录并确认账户后才能保存个人学习记录。');
+        const snapshot = {version: 1, userId, state: S.validateState(state), savedAt: new Date().toISOString()};
+        root.localStorage.setItem(stateKey(userId), JSON.stringify(snapshot));
+      }
+    };
   }
 
   async function request(path, options = {}) {
@@ -49,22 +117,41 @@
     if (!S || !options || typeof options.getState !== 'function' || typeof options.setState !== 'function') {
       throw new Error('云端同步需要 IELTS_SYNC、getState 和 setState。');
     }
+    if (options.expectedUserId !== undefined && !validUserId(options.expectedUserId)) {
+      throw new Error('云端同步需要已确认的登录账户。');
+    }
+    const expectedUserId = options.expectedUserId || null;
+    const syncMetadataKey = expectedUserId ? metadataKey(expectedUserId) : META_KEY;
     let metadata = {userId: null, revision: 0, baseline: null};
     let status = {status: 'loading', message: '正在连接云端学习记录…', updatedAt: null, user: null, revision: 0};
     let conflict = null, busy = null, timer = null, poll = null;
-    let started = false, stopped = false, pending = false, generation = 0;
+    let started = false, stopped = false, pending = false, generation = 0, accountBlocked = false;
 
     function readLocal() { return S.validateState(options.getState()); }
     function storeMetadata(next) {
       metadata = {userId: next.userId, revision: next.revision,
         baseline: next.baseline == null ? null : S.validateState(next.baseline)};
-      try { root.localStorage.setItem(META_KEY, JSON.stringify(metadata)); }
+      try { root.localStorage.setItem(syncMetadataKey, JSON.stringify(metadata)); }
       catch (_) { /* In-memory ownership and the local app state remain intact. */ }
     }
     try {
-      const saved = JSON.parse(root.localStorage.getItem(META_KEY) || 'null');
+      let saved = JSON.parse(root.localStorage.getItem(syncMetadataKey) || 'null');
+      if (!saved && expectedUserId) {
+        const legacy = JSON.parse(root.localStorage.getItem(META_KEY) || 'null');
+        if (legacy?.userId === expectedUserId) saved = legacy;
+        if (!saved) {
+          for (const key of [stateKey(expectedUserId), accountKey(expectedUserId)]) {
+            const backup = JSON.parse(root.localStorage.getItem(key) || 'null');
+            if (backup?.userId === expectedUserId && Object.prototype.hasOwnProperty.call(backup, 'baseline')) {
+              saved = backup;
+              break;
+            }
+          }
+        }
+      }
       if (saved && typeof saved.userId === 'string' && saved.userId && Number.isSafeInteger(saved.revision)
-        && saved.revision >= 0 && Object.prototype.hasOwnProperty.call(saved, 'baseline')) {
+        && saved.revision >= 0 && (!expectedUserId || saved.userId === expectedUserId)
+        && Object.prototype.hasOwnProperty.call(saved, 'baseline')) {
         metadata = {userId: saved.userId, revision: saved.revision,
           baseline: saved.baseline == null ? null : S.validateState(saved.baseline)};
       }
@@ -83,6 +170,12 @@
         || (value.updatedAt !== null && (typeof value.updatedAt !== 'string' || !Number.isFinite(Date.parse(value.updatedAt))))
         || !Object.prototype.hasOwnProperty.call(value, 'state')) {
         throw new ServiceError('unavailable', '云端学习记录格式无效，已保留本机记录。');
+      }
+      if (expectedUserId && value.user.id !== expectedUserId) {
+        accountBlocked = true; pending = false;
+        root.clearTimeout(timer); timer = null;
+        options.onAccountMismatch?.();
+        throw new ServiceError('account-changed', '登录账户已变化，请刷新页面确认当前账户；已暂停记录上传。');
       }
       let state;
       try { state = value.state == null ? null : S.validateState(value.state); }
@@ -112,14 +205,23 @@
       const previous = {version: 1, userId: metadata.userId, revision: metadata.revision,
         baseline: metadata.baseline, state: readLocal(), savedAt: new Date().toISOString()};
       const replacement = remote.state || makeInitial();
-      try { root.localStorage.setItem(accountKey(metadata.userId), JSON.stringify(previous)); }
+      try {
+        preserveSnapshot(accountKey(metadata.userId), previous);
+        const cached = root.localStorage.getItem(stateKey(metadata.userId));
+        if (cached) {
+          const snapshot = JSON.parse(cached);
+          if (snapshot.userId !== metadata.userId) throw new Error('账户缓存归属无效');
+          preserveSnapshot(accountKey(metadata.userId), snapshot);
+        }
+        root.localStorage.setItem(stateKey(metadata.userId), JSON.stringify(previous));
+      }
       catch (_) { throw new ServiceError('unavailable', '无法备份上一账户的本机进度，已暂停账户切换和云端上传。'); }
       commitBaseline(remote, remote.state);
       conflict = null;
       options.setState(copy(replacement));
       // Any changes made while rendering the new account belong to that new account.
       pending = true;
-      emit({...currentView(remote), status: 'synced', message: '已切换到当前登录账户，上一账户的本机进度已单独保存。'});
+      emit({...currentView(remote), status: 'pending', message: '已切换到当前登录账户；上一账户本机进度已单独保存，正在确认当前记录。'});
       return true;
     }
     function showConflict(remote, conflicts) {
@@ -131,9 +233,11 @@
     function synced(remote, baseline, message = '学习记录已同步到云端。') {
       commitBaseline(remote, baseline);
       conflict = null;
-      emit({...currentView(remote), status: 'synced', message});
       // A PUT only acknowledges its own snapshot, never edits made while it was in flight.
-      if (S.fingerprint(readLocal()) !== S.fingerprint(baseline)) pending = true;
+      const hasNewerLocal = S.fingerprint(readLocal()) !== S.fingerprint(baseline);
+      if (hasNewerLocal) pending = true;
+      emit({...currentView(remote), status: hasNewerLocal ? 'pending' : 'synced',
+        message: hasNewerLocal ? '本机新记录已保存，正在等待云端确认。' : message});
     }
     async function put(remote, snapshot) {
       const headers = {'Content-Type': 'application/json'};
@@ -192,17 +296,20 @@
       timer = root.setTimeout(() => { timer = null; pending = false; sync(); }, 1000);
     }
     function queue() {
-      if (stopped) return;
+      if (stopped || accountBlocked) return;
       pending = true;
       if (conflict) {
         conflict.local = readLocal();
         options.onConflict?.(copy(conflict));
         return;
       }
+      if (!['unauthorized', 'unavailable', 'account-changed', 'offline'].includes(status.status)) {
+        emit({status: 'pending', message: '本机记录已保存，正在等待云端确认。'});
+      }
       if (!busy) schedule();
     }
     function run(operation) {
-      if (stopped) return Promise.resolve(copy(status));
+      if (stopped || accountBlocked) return Promise.resolve(copy(status));
       if (busy) { pending = true; return busy; }
       root.clearTimeout(timer); timer = null; pending = false;
       const token = generation;
@@ -289,5 +396,5 @@
     if (!Array.isArray(lessons)) throw new ServiceError('unavailable', '云端课程列表格式无效。');
     return root.IELTS_SYNC.validateLessons(lessons);
   }
-  root.IELTS_CLOUD = {create, loadLessons};
+  root.IELTS_CLOUD = {create, createAccountCache, loadLessons};
 })(window);
