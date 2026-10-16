@@ -30,7 +30,12 @@ assets['/docs/EMAIL_LOGIN_SETUP.md']={body:await readFile(path.join(root,'docs/E
 const context={window:{}};vm.createContext(context);vm.runInContext(assets['/reading-data.js'].body,context);
 const seedLessons=JSON.parse(JSON.stringify(context.window.READING_LESSONS));
 const [engine,sync,auth,backend]=await Promise.all(['dist/engine.js','dist/sync-state.js','worker/email-auth.mjs','worker/index.mjs'].map(f=>readFile(path.join(root,f),'utf8')));
-let code=engine+'\n'+sync+'\n'+auth+'\nconst SITE_ASSETS='+JSON.stringify(assets)+';\nconst SITE_SEED_LESSONS='+JSON.stringify(seedLessons)+';\n'+backend.replace(/^import '\.\/email-auth\.mjs';\s*/m,'');
+const [transport,recovery,store]=await Promise.all(['runtime/shared-d1.mjs','worker/account-recovery.mjs','worker/shared-store.mjs'].map(f=>readFile(path.join(root,f),'utf8')));
+const moduleBody=source=>source.replace(/^import[^\n]*;\s*/gm,'').replace(/^export (?=(?:async )?function |class |const )/gm,'');
+const scopedTransport='const {createSharedD1Client}=(()=>{'+moduleBody(transport)+'\nreturn {createSharedD1Client};})();';
+const scopedRecovery='const {previewAccountRecovery}=(()=>{'+moduleBody(recovery)+'\nreturn {previewAccountRecovery};})();';
+const scopedStore='(()=>{'+moduleBody(store)+'\n})();';
+let code=engine+'\n'+sync+'\n'+auth+'\n'+scopedTransport+'\n'+scopedRecovery+'\n'+scopedStore+'\nconst SITE_ASSETS='+JSON.stringify(assets)+';\nconst SITE_SEED_LESSONS='+JSON.stringify(seedLessons)+';\n'+backend.replace(/^import[^\n]*;\s*/gm,'');
 if(standalone){
   assert.equal((code.match(/^export default \{/gm)||[]).length,1);
   const boundary=await readFile(path.join(root,'worker/cloudflare-boundary.mjs'),'utf8');

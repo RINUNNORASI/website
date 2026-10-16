@@ -1,4 +1,6 @@
 import './email-auth.mjs';
+import {createSharedD1Client} from '../runtime/shared-d1.mjs';
+import './shared-store.mjs';
 // The build embeds engine.js, sync-state.js, and SITE_ASSETS before this module.
 // Identity headers below are supplied by the Sites gateway, never the client UI.
 const MAX_REQUEST_BYTES = 1024 * 1024;
@@ -437,6 +439,9 @@ async function mcp(request, env) {
     if (rpc.method === 'tools/call') return rpcResult(id, {content: [{type: 'text', text: JSON.stringify({error: error.code})}], isError: true});
     return rpcError(id, -32001, error.code);
   }
+  if (env.SHARED_DB && env.SHARED_D1_MODE === 'active') {
+    user = await globalThis.XUNCI_SHARED_STORE.resolveSharedIdentity(request, {...env, DB: env.SHARED_DB}, user);
+  }
   if (rpc.method === 'tools/list') return rpcResult(id, {tools: MCP_TOOLS});
   if (!rpc.params || typeof rpc.params !== 'object' || Array.isArray(rpc.params)
     || typeof rpc.params.name !== 'string') return rpcError(id, -32602, 'Invalid params');
@@ -444,6 +449,10 @@ async function mcp(request, env) {
   let result;
   let isError = false;
   try {
+    if (env.SHARED_D1_MODE === 'preview' && env.SHARED_MIGRATION_APPLY === '1'
+      && ['publish_reading_lesson', 'publish_word_cards'].includes(rpc.params.name)) {
+      throw new RequestError(503, 'migration_in_progress');
+    }
     if (rpc.params.name === 'get_daily_learning_instructions') {
       envelope(args, []);
       const asset = embeddedAsset('/docs/DAILY_REQUIREMENTS.md');
@@ -452,7 +461,16 @@ async function mcp(request, env) {
     } else if (rpc.params.name === 'list_reading_lessons') {
       envelope(args, []); result = await listLessons(database(env));
     } else if (rpc.params.name === 'get_learning_summary') {
-      envelope(args, []); result = await learningSummary(database(env), user, env);
+      envelope(args, []);
+      if (env.SHARED_DB && env.LEGACY_DB) {
+        const prepared = await globalThis.XUNCI_SHARED_STORE.prepareSharedIdentity(request,
+          {...env, DB: env.SHARED_DB}, identity(request));
+        const useShared = ['applied', 'linked', 'mapped'].includes(prepared.report?.phase)
+          || env.SHARED_D1_MODE === 'active';
+        result = await learningSummary(useShared ? env.SHARED_DB : env.LEGACY_DB,
+          useShared ? prepared.user : identity(request), env);
+        result.unification = prepared.report;
+      } else result = await learningSummary(database(env), user, env);
     } else if (rpc.params.name === 'get_word_cards') {
       envelope(args, []); requireEditor(request, env); result = await readWordCards(database(env));
     } else if (rpc.params.name === 'publish_reading_lesson') {
@@ -537,6 +555,21 @@ export default {
   async fetch(request, env) {
     const pathname = new URL(request.url).pathname;
     try {
+      if (env?.SHARED_D1_ENDPOINT && (pathname.startsWith('/api/') || pathname === '/mcp'
+        || (pathname === '/' && new URL(request.url).searchParams.has('code')))) {
+        if (!['preview', 'active'].includes(env.SHARED_D1_MODE)) throw new RequestError(503, 'shared_storage_not_ready');
+        if (env.SHARED_D1_MODE === 'active' && !globalThis.XUNCI_EMAIL_AUTH.config(env)) {
+          throw new RequestError(503, 'shared_email_auth_required');
+        }
+        if (env.SHARED_D1_MODE === 'preview' && env.SHARED_MIGRATION_APPLY === '1'
+          && ((pathname === '/api/learning-state' && request.method === 'PUT')
+            || (['/api/lessons', '/api/word-cards'].includes(pathname) && request.method === 'POST'))) {
+          return json({error: 'migration_in_progress'}, 503);
+        }
+        const shared = createSharedD1Client({endpoint: env.SHARED_D1_ENDPOINT, secret: env.SHARED_D1_SECRET});
+        env = {...env, LEGACY_DB: env.DB, SHARED_DB: shared,
+          DB: env.SHARED_D1_MODE === 'active' ? shared : env.DB};
+      }
       if (pathname === '/' && request.method === 'GET' && new URL(request.url).searchParams.has('code')) {
         return await globalThis.XUNCI_EMAIL_AUTH.handleMagicCallback(request, env);
       }
@@ -550,6 +583,9 @@ export default {
       if (pathname.startsWith('/api/')) return json({error: 'not_found'}, 404);
       return staticAsset(request, pathname);
     } catch (error) {
+      if (error instanceof globalThis.XUNCI_SHARED_STORE.SharedStoreError) {
+        return json({error: error.code}, error.status);
+      }
       if (error instanceof globalThis.XUNCI_EMAIL_AUTH.AuthError) return json({error: error.code, ...error.details,
         ...(error.status === 401 ? {signInPath: '/#settings'} : {})}, error.status);
       if (error instanceof RequestError) return json({error: error.code,

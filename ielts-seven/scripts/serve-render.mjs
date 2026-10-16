@@ -1,6 +1,8 @@
 import {pathToFileURL} from 'node:url';
 import {canonicalOriginFromEnv, createNodeServer} from '../runtime/node-http.mjs';
 import {configFromEnv, createD1Rest, resolveD1ConfigFromEnv} from '../runtime/d1-rest.mjs';
+import {createSharedD1Handler} from '../runtime/shared-d1.mjs';
+import {SHARED_SCHEMA} from '../worker/shared-store.mjs';
 
 function coreRenderConfiguration(env) {
   const publicOrigin = canonicalOriginFromEnv(env);
@@ -41,8 +43,18 @@ export async function startRenderServer({env = process.env, worker, createDB = c
   fetchImpl = globalThis.fetch} = {}) {
   const config = await resolvedRenderConfiguration(env, {fetchImpl});
   const application = worker || (await import('../.cloudflare/worker.mjs')).default;
-  const server = createNodeServer({worker: application, publicOrigin: config.publicOrigin,
-    env: {...config.workerEnv, DB: createDB(config.database)}});
+  const db = createDB(config.database);
+  let sharedHandler = null;
+  if (env.SHARED_D1_SECRET) {
+    for (const sql of SHARED_SCHEMA) await db.prepare(sql).run();
+    sharedHandler = createSharedD1Handler({db, secret: env.SHARED_D1_SECRET});
+  }
+  const routed = {fetch: async (request, workerEnv, context) => {
+    if (sharedHandler) { const reply = await sharedHandler(request); if (reply) return reply; }
+    return application.fetch(request, workerEnv, context);
+  }};
+  const server = createNodeServer({worker: routed, publicOrigin: config.publicOrigin,
+    env: {...config.workerEnv, DB: db}});
   await new Promise((resolve, reject) => {
     server.once('error', reject);
     server.listen(config.port, '0.0.0.0', () => { server.off('error', reject); resolve(); });
