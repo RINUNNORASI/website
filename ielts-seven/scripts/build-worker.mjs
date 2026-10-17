@@ -9,13 +9,14 @@ const root=process.cwd(),output=path.join(root,standalone?'.cloudflare':'.artifa
 await rm(output,{recursive:true,force:true});
 await mkdir(standalone?output:path.join(output,'server'),{recursive:true});
 if(!standalone)await mkdir(path.join(output,'.openai'),{recursive:true});
-const types={'.html':'text/html; charset=utf-8','.js':'text/javascript; charset=utf-8','.css':'text/css; charset=utf-8','.svg':'image/svg+xml','.png':'image/png','.md':'text/markdown; charset=utf-8','.json':'application/json; charset=utf-8'};
+const types={'.html':'text/html; charset=utf-8','.js':'text/javascript; charset=utf-8','.css':'text/css; charset=utf-8','.svg':'image/svg+xml','.png':'image/png','.mp3':'audio/mpeg','.md':'text/markdown; charset=utf-8','.json':'application/json; charset=utf-8'};
+const binaryTypes=new Set(['.png','.mp3']);
 const assets={};
 async function collect(dir,prefix=''){
   for(const entry of await readdir(dir,{withFileTypes:true})){
     const file=path.join(dir,entry.name),route=prefix+'/'+entry.name;
     if(entry.isDirectory())await collect(file,route);
-    else{const extension=path.extname(file);if(!types[extension])continue;const bytes=await readFile(file);assets[route]={body:extension==='.png'?bytes.toString('base64'):bytes.toString('utf8'),type:types[extension],...(extension==='.png'?{base64:true}:{})};}
+    else{const extension=path.extname(file);if(!types[extension])continue;const bytes=await readFile(file);const binary=binaryTypes.has(extension);assets[route]={body:binary?bytes.toString('base64'):bytes.toString('utf8'),type:types[extension],...(binary?{base64:true}:{})};}
   }
 }
 await collect(path.join(root,'dist'));
@@ -53,6 +54,19 @@ assert.equal(front.status,200);assert.match(await front.text(),/循词/);
 const icon=await worker.default.fetch(new Request('https://xunci.test/assets/mark.png'),{});
 assert.equal(icon.status,200);assert.equal(icon.headers.get('Content-Type'),'image/png');
 const magic=new Uint8Array(await icon.arrayBuffer());assert.deepEqual([...magic.slice(0,4)],[137,80,78,71]);
+// Verify the deployed representation rather than just the source file. MP3s must
+// remain binary through embedding, and native players need byte-range seeking.
+for(const [route,asset] of Object.entries(assets).filter(([,asset])=>asset.type==='audio/mpeg')){
+  const expected=await readFile(path.join(root,'dist',route.slice(1)));
+  assert.ok(expected.length>0,'Empty bundled audio: '+route);
+  const response=await worker.default.fetch(new Request('https://xunci.test'+route),{});
+  assert.equal(response.headers.get('Content-Type'),'audio/mpeg');
+  assert.equal(response.headers.get('Content-Length'),String(expected.length));
+  assert.deepEqual(Buffer.from(await response.arrayBuffer()),expected,'Audio bytes changed: '+route);
+  const partial=await worker.default.fetch(new Request('https://xunci.test'+route,{headers:{Range:'bytes=0-3'}}),{});
+  assert.equal(partial.status,206);
+  assert.deepEqual(Buffer.from(await partial.arrayBuffer()),expected.subarray(0,4));
+}
 if(standalone){
   const script=await worker.default.fetch(new Request('https://xunci.test/app.js'),{});
   assert.ok(!(await script.text()).includes('/signin-with-chatgpt'));

@@ -543,12 +543,46 @@ function staticAsset(request, pathname) {
   if (!['GET', 'HEAD'].includes(request.method)) return new Response('Method not allowed', {status: 405, headers: {Allow: 'GET, HEAD'}});
   const asset = embeddedAsset(pathname === '/' ? '/index.html' : pathname);
   if (!asset) return new Response('Not found', {status: 404});
-  return new Response(request.method === 'HEAD' ? null : asset.base64 ? Uint8Array.from(atob(asset.body),c=>c.charCodeAt(0)) : asset.body, {headers: {
+  const bytes = asset.base64 ? Uint8Array.from(atob(asset.body), c => c.charCodeAt(0)) : new TextEncoder().encode(asset.body);
+  const headers = new Headers({
     'Content-Type': asset.type,
+    'Content-Length': String(bytes.length),
     'Cache-Control': 'no-cache',
     'X-Content-Type-Options': 'nosniff',
     'Referrer-Policy': 'same-origin',
-  }});
+  });
+  if (asset.type.startsWith('audio/')) {
+    headers.set('Accept-Ranges', 'bytes');
+    // Range only applies to GET. Without an ETag or Last-Modified validator we
+    // cannot satisfy If-Range, so send the full representation in that case.
+    const range = request.method === 'GET' && !request.headers.has('If-Range')
+      ? request.headers.get('Range') : null;
+    // Ignore unsupported units, malformed syntax and multipart requests. A
+    // valid single range is either satisfiable (206) or unsatisfiable (416).
+    const match = range?.trim().match(/^bytes=(\d*)-(\d*)$/i);
+    if (match && (match[1] || match[2])) {
+      const size = BigInt(bytes.length);
+      let start, end;
+      if (match[1]) {
+        start = BigInt(match[1]);
+        end = match[2] ? BigInt(match[2]) : size - 1n;
+        if (end >= size) end = size - 1n;
+      } else {
+        const suffix = BigInt(match[2]);
+        start = suffix >= size ? 0n : size - suffix;
+        end = size - 1n;
+      }
+      if (start >= size || start > end) {
+        headers.set('Content-Range', `bytes */${bytes.length}`);
+        headers.set('Content-Length', '0');
+        return new Response(null, {status: 416, headers});
+      }
+      headers.set('Content-Range', `bytes ${start}-${end}/${bytes.length}`);
+      headers.set('Content-Length', String(end - start + 1n));
+      return new Response(bytes.subarray(Number(start), Number(end) + 1), {status: 206, headers});
+    }
+  }
+  return new Response(request.method === 'HEAD' ? null : bytes, {headers});
 }
 
 export default {
