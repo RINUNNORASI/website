@@ -4,7 +4,7 @@
   <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="theme-color" content="#173f35"><meta name="description" content="循词：为 IELTS 7 分慢慢积累。中文词汇教学、个性化间隔复习与真实英文文章精读。">
   <title>循词 · IELTS 7 学习工作台</title>
-  <link rel="icon" href="assets/mark.png" type="image/png"><link rel="stylesheet" href="styles.css"><link rel="stylesheet" href="redesign.css"><link rel="stylesheet" href="reading-ui.css"><link rel="stylesheet" href="plan-ui.css"><link rel="stylesheet" href="auth-ui.css"><link rel="stylesheet" href="practice-ui.css">
+  <link rel="icon" href="assets/mark.png" type="image/png"><link rel="stylesheet" href="styles.css"><link rel="stylesheet" href="redesign.css"><link rel="stylesheet" href="reading-ui.css"><link rel="stylesheet" href="plan-ui.css"><link rel="stylesheet" href="auth-ui.css"><link rel="stylesheet" href="practice-ui.css"><link rel="stylesheet" href="listening-ui.css"><link rel="stylesheet" href="site-updates.css">
 </head>
 <body>
  <aside class="sidebar">
@@ -15,6 +15,7 @@
    <a href="#review" data-nav="review"><span class="nav-icon">↻</span>词汇练习<span id="due-count" class="nav-count"></span></a>
    <a href="#library" data-nav="library"><span class="nav-icon">▤</span>我的词库</a>
    <a href="#reading" data-nav="reading"><span class="nav-icon">▥</span>每日精读</a>
+   <a href="#listening" data-nav="listening"><span class="nav-icon">♫</span>听力练习</a>
    <a href="#plan" data-nav="plan"><span class="nav-icon">▦</span>学习轨迹</a>
   </nav>
   <div class="sidebar-bottom"><div id="sidebar-progress"></div><a href="#settings" class="settings-link">⚙ 数据与设置</a><a class="local-status" href="#settings"><i></i><span id="sidebar-sync-label">连接中</span></a></div>
@@ -22,9 +23,9 @@
  <div class="workspace">
   <header class="topbar"><div id="breadcrumb">学习工作台 <span>/</span> 今日学习</div><div class="top-actions"><span id="top-date"></span><button type="button" class="button outline small" data-action="auth-login" id="account-button">账号</button><a href="#settings" class="sync-badge" id="sync-badge" data-status="loading"><i></i><span id="sync-label">连接中</span></a></div></header>
   <main id="main" tabindex="-1"></main>
-  <footer><a href="#library">词库</a><a href="#review">词汇练习</a><a href="#reading">阅读课程</a><a href="#settings" class="footer-note">账号与数据</a></footer>
+  <footer><a href="#library">词库</a><a href="#review">词汇练习</a><a href="#reading">阅读课程</a><a href="#listening">听力练习</a><a href="#settings" class="footer-note">账号与数据</a></footer>
  </div>
  <dialog id="modal"><button class="dialog-close" aria-label="关闭">×</button><div id="modal-content"></div></dialog>
  <div id="toast" role="status" aria-live="polite"></div>
- <script src="vocab-history.js"></script><script src="vocab-new.js"></script><script src="reading-data.js"></script><script src="engine.js"></script><script src="export-xlsx.js"></script><script src="sync-state.js"></script><script src="cloud-client.js"></script><script src="pronunciation.js"></script><script src="frequency-data.js"></script><script src="classifier.js"></script><script src="exam-notes.js"></script><script src="reading-ui.js"></script><script src="plan-ui.js"></script><script src="auth-ui.js"></script><script src="practice-methods.js"></script><script src="practice-ui.js"></script><script src="app.js"></script>
+ <script src="vocab-history.js"></script><script src="vocab-new.js"></script><script src="reading-data.js"></script><script src="engine.js"></script><script src="export-xlsx.js"></script><script src="sync-state.js"></script><script src="cloud-client.js"></script><script src="pronunciation.js"></script><script src="frequency-data.js"></script><script src="classifier.js"></script><script src="exam-notes.js"></script><script src="reading-ui.js"></script><script src="plan-ui.js"></script><script src="auth-ui.js"></script><script src="practice-methods.js"></script><script src="practice-batches.js"></script><script src="practice-ui.js"></script><script src="listening-data.js"></script><script src="listening-ui.js"></script><script src="app.js"></script>
 </body></html>

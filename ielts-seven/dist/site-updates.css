@@ -1,0 +1,10 @@
+/* Six visible navigation destinations remain usable on narrow screens. */
+@media(max-width:650px){
+  .sidebar{display:block;padding:10px 14px;max-width:100%;box-sizing:border-box}
+  .sidebar .brand{display:inline-flex;margin:0}
+  .sidebar nav{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:3px;margin-top:8px;width:100%;min-width:0}
+  .sidebar nav a{display:flex;align-items:center;justify-content:center;min-width:0;min-height:44px;box-sizing:border-box;padding:7px 5px;font-size:12px;white-space:normal;text-align:center}
+  .sidebar nav a:focus-visible{outline:2px solid #537c9a;outline-offset:-2px}
+  .review-list .batch-row{flex-wrap:wrap;gap:10px}
+  .review-list .batch-info{min-width:0;flex:1 1 65%;overflow-wrap:anywhere}
+}

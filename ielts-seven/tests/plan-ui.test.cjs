@@ -75,3 +75,51 @@ test('rendered time budgets sum to the configured minutes and all data text is e
   assert.ok(html.includes('&lt;img src=x onerror=alert(1)&gt;'));
   assert.ok(!html.includes('<img src=x'));
 });
+
+function planFormHarness(state) {
+  UI.render({state, date, engine: E});
+  const listeners = new Map();
+  const customWeeks = {hidden: true};
+  const message = {textContent: ''};
+  const button = {disabled: false};
+  const form = {
+    values: {examDate: '', cyclePreset: '12', cycleWeeks: '9', dailyMinutes: '60', dailyNewLimit: '15', dailyReviewLimit: '20'},
+    addEventListener: (type, callback) => listeners.set('form:' + type, callback),
+    querySelector: selector => selector === '#plan-form-message' ? message : button
+  };
+  const preset = {addEventListener: (type, callback) => listeners.set('preset:' + type, callback)};
+  const main = {
+    innerHTML: '', querySelectorAll: () => [],
+    querySelector: selector => ({'#plan-cycle-preset': preset, '.pl-custom-weeks': customWeeks, '#plan-preferences': form, '#plan-form-message': message}[selector] || null)
+  };
+  return {main, form, customWeeks, message, button, listeners};
+}
+
+test('custom planning weeks can be shown and hidden without losing the entered value', () => {
+  const h = planFormHarness({records: [], readingState: {completed: {}}, preferences: {}});
+  UI.bind(h.main, {});
+  const change = h.listeners.get('preset:change');
+  change({target: {value: 'custom'}});
+  assert.equal(h.customWeeks.hidden, false);
+  change({target: {value: '16'}});
+  assert.equal(h.customWeeks.hidden, true);
+  change({target: {value: 'custom'}});
+  assert.equal(h.customWeeks.hidden, false);
+  assert.equal(h.form.values.cycleWeeks, '9');
+});
+
+test('the responsive preferences form saves the selected custom duration and all numeric limits', async () => {
+  const state = {records: [], readingState: {completed: {}}, preferences: {}};
+  const h = planFormHarness(state);
+  h.form.values.cyclePreset = 'custom';
+  let saved;
+  UI.bind(h.main, {onPreferences: async preferences => { saved = preferences; }});
+  const OriginalFormData = global.FormData;
+  global.FormData = class { constructor(form) { this.values = form.values; } get(key) { return this.values[key]; } };
+  try {
+    await h.listeners.get('form:submit')({preventDefault() {}, currentTarget: h.form});
+  } finally { global.FormData = OriginalFormData; }
+  assert.deepEqual(saved, {examDate: null, cycleWeeks: 9, dailyMinutes: 60, dailyNewLimit: 15, dailyReviewLimit: 20});
+  assert.equal(state.preferences.cycleWeeks, 9);
+  assert.equal(h.message.textContent, '计划已保存');
+});

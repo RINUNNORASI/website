@@ -54,7 +54,7 @@
 
   function passage(lesson, showAnswers) {
     const article = lesson.article;
-    if (!article?.paragraphs?.length) return `<article class="ru-source-card"><span class="ru-source-kicker" lang="en">READ AT THE SOURCE</span><h3 lang="en">${esc(lesson.title)}</h3><p class="ru-source-meta">${esc(lesson.source)} · ${esc(lesson.published)}</p><p>本课程保留原文链接，请在来源网站阅读完整文章。打开原文后，可返回本页继续作答。</p><a class="button outline" href="${url(lesson.url)}" target="_blank" rel="noopener noreferrer">打开原文 ↗</a></article>`;
+    if (!article?.paragraphs?.length) return `<article class="ru-source-card"><span class="ru-source-kicker" lang="en">READ AT THE SOURCE</span><h3 lang="en">${esc(lesson.title)}</h3><p class="ru-source-meta">${esc(lesson.source)} · ${esc(lesson.published)}</p><p>本课程保留原文链接，请在来源网站阅读完整文章。若想在本站连续阅读，可以选择带完整原文的课程；本篇作答仍会保留。</p><div class="ru-source-actions"><a class="button outline" href="${url(lesson.url)}" target="_blank" rel="noopener noreferrer">打开原文 ↗</a><button type="button" class="button outline" data-action="reading-inline-archive">选择站内全文课程 →</button></div></article>`;
     const sourceLink = `<a href="${url(lesson.url)}" target="_blank" rel="noopener noreferrer">${esc(lesson.source)}</a>`;
     const author = String(article.author || '');
     const credit = author.endsWith(` | ${lesson.source}`) ? `${esc(author.slice(0, -lesson.source.length))}${sourceLink}` : `${author ? `${esc(author)} · ` : ''}${sourceLink}`;

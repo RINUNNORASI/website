@@ -35,7 +35,10 @@ function harness({entries=[],initial=signedOut(),deferInit=false,loadLessons=asy
   if(!noAuth)window.IELTS_AUTH={consumeCallback:()=>null,create:options=>{authHooks=options;return {getStatus:()=>copy(auth),init:()=>deferInit?init.promise:Promise.resolve(copy(auth)),open(){},logout:async()=>{await options.onBeforeChange();auth=signedOut();options.onStatus(copy(auth));await options.onChange();}};}};
   const context={window,document,location:window.location,localStorage:window.localStorage,fetch:(...args)=>fetch(...args),Intl,Date,Map,Set,Promise,Error,TypeError,FormData:class{constructor(form){this.values=form?.values||{};}*[Symbol.iterator](){yield* Object.entries(this.values);}get(key){return this.values[key]??null;}},clearTimeout:window.clearTimeout,setTimeout:window.setTimeout,setInterval:window.setInterval};
   vm.runInNewContext(fs.readFileSync(require.resolve('../dist/practice-methods.js'),'utf8'),context);
+  vm.runInNewContext(fs.readFileSync(require.resolve('../dist/practice-batches.js'),'utf8'),context);
   vm.runInNewContext(fs.readFileSync(require.resolve('../dist/practice-ui.js'),'utf8'),context);
+  vm.runInNewContext(fs.readFileSync(require.resolve('../dist/listening-data.js'),'utf8'),context);
+  vm.runInNewContext(fs.readFileSync(require.resolve('../dist/listening-ui.js'),'utf8'),context);
   vm.runInNewContext(fs.readFileSync(require.resolve('../dist/reading-ui.js'),'utf8'),context);
   window.IELTS_READING_UI.bind=()=>{};
   vm.runInNewContext(app,context);
@@ -46,6 +49,7 @@ function harness({entries=[],initial=signedOut(),deferInit=false,loadLessons=asy
     status(status){auth=copy(status);authHooks.onStatus(copy(auth));},setStorageFailure(value){failStorage=value;},
     async click(action,dataset={}){await events.get('click')({target:{closest:()=>({dataset:{action,...dataset}})}});await settle();},
     input(value){events.get('input')({target:{dataset:{practiceInput:'answer'},value}});},
+    inputTarget(target){events.get('input')({target});},
     async route(name){window.location.hash='#'+name;events.get('hashchange')();await settle();},node,
   };
 }
@@ -245,4 +249,68 @@ test('catalog loading preserves answers in a manually opened reading form',async
   catalog.resolve([]);await settle();
   assert.match(h.html(),/value="draft before loading finished"/);
   assert.deepEqual(copy(h.latest().options.getState().readingState.results),{},'draft never becomes a submitted result');
+});
+
+test('new daily recommendations skip source-only lessons and choose a saved licensed full passage',async()=>{
+  const all=readingLessons(),teacher=all.find(lesson=>lesson.id==='teacher-communication'),inline=all.find(lesson=>lesson.id==='urban-health');
+  const h=harness({initial:signedIn('A'),route:'reading',lessons:[teacher,inline]});await settle();
+  assert.equal(h.latest().options.getState().readingState.assignments[E.today()],inline.id);
+  assert.match(h.html(),/ru-passage-article/);assert.doesNotMatch(h.html(),/ru-source-card/);
+});
+
+test('choosing an inline course preserves the historical source-only assignment and submitted reading answers',async()=>{
+  const lessons=readingLessons(),teacher=lessons.find(lesson=>lesson.id==='teacher-communication'),state=empty();
+  state.readingState.assignments[E.today()]=teacher.id;
+  state.readingState.results[E.today()+'|'+teacher.id]={lessonId:teacher.id,date:E.today(),submittedAt:new Date().toISOString(),answers:Object.fromEntries(teacher.questions.map(question=>[question.id,question.answer]))};
+  const h=harness({initial:signedIn('A'),route:'reading',lessons,entries:[stored('A',state)]});await settle();
+  const before=copy(h.latest().options.getState());
+  assert.match(h.html(),/选择站内全文课程/);
+  await h.click('reading-inline-archive');
+  assert.match(h.modal().innerHTML,/站内全文/);
+  assert.doesNotMatch(h.modal().innerHTML,/Positive teacher communication/);
+  await h.click('choose-lesson',{id:'urban-health'});
+  assert.match(h.html(),/ru-passage-article/);
+  assert.deepEqual(copy(h.latest().options.getState()),before);
+  assert.equal(h.latest().queued,0,'viewing another full passage never overwrites the old assignment or score');
+});
+
+test('running out of unseen full passages never silently recommends a source-only course',async()=>{
+  const lessons=readingLessons(),state=empty();
+  lessons.filter(lesson=>lesson.article).forEach((lesson,index)=>{state.readingState.assignments[E.addDays(E.today(),-index-1)]=lesson.id;});
+  const h=harness({initial:signedIn('A'),route:'reading',lessons,entries:[stored('A',state)]});await settle();
+  assert.match(h.html(),/暂无新的站内全文课程/);
+  assert.equal(h.latest().options.getState().readingState.assignments[E.today()],undefined);
+  assert.equal(h.latest().queued,0);
+});
+
+test('dashboard starts the same bounded small groups as the practice page without exposing a huge import as one batch',async()=>{
+  const state=empty();state.preferences.dailyNewLimit=7;
+  state.records=E.seed(Array.from({length:20},(_,index)=>({word:'sample'+String.fromCharCode(97+index),firstSeen:E.addDays(E.today(),-1),level:'A',meaning:'示例词义',ipa:'/test/',pos:'n.',batch:'Large source batch'})));
+  const h=harness({initial:signedIn('A'),route:'today',entries:[stored('A',state)]});await settle();
+  assert.match(h.html(),/这一组练习 6 个词/);
+  assert.match(h.html(),/本轮练习小组/);
+  assert.doesNotMatch(h.html(),/data-action="start-batch"/);
+  const id=/data-action="start-group" data-id="([^"]+)"/.exec(h.html())[1];
+  await h.click('start-group',{id});
+  assert.match(h.html(),/1 \/ 6/);
+  assert.equal(h.latest().options.getState().records.filter(record=>record.reviewHistory.length).length,0);
+});
+
+test('integrated listening notes survive a route visit but never sync as vocabulary or enter another account',async()=>{
+  const a=withWord('account-a-word');
+  const h=harness({initial:signedIn('A'),route:'listening',entries:[stored('A',a)]});await settle();
+  assert.match(h.html(),/把听到的，变成听懂的/);
+  const epoch=/data-listening-epoch="(\d+)"/.exec(h.html())[1];
+  h.inputTarget({dataset:{listeningField:'gist',listeningEpoch:epoch},value:'A private listening draft'});
+  await h.route('library');await h.route('listening');
+  assert.match(h.html(),/A private listening draft/);
+  assert.equal(h.latest().queued,0);
+  assert.deepEqual(copy(h.latest().options.getState()),copy(a));
+  await h.change(signedIn('B'));
+  assert.doesNotMatch(h.html(),/A private listening draft|account-a-word/);
+  h.inputTarget({dataset:{listeningField:'gist',listeningEpoch:epoch},value:'Stale A input'});
+  await h.route('library');await h.route('listening');
+  assert.doesNotMatch(h.html(),/Stale A input/);
+  assert.equal(h.latest().options.getState().records.length,0);
+  assert.equal(h.latest().queued,0);
 });

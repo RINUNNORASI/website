@@ -36,6 +36,7 @@ test('missing or empty original paragraphs show a usable source card and keep th
     assert.match(card, /A useful reading passage/);
     assert.match(card, /Example publisher · 2026-10-14/);
     assert.match(card, /本课程保留原文链接/);
+    assert.match(card, /data-action="reading-inline-archive">选择站内全文课程/);
     assert.match(card, /href="https:\/\/example\.test\/original" target="_blank" rel="noopener noreferrer">打开原文 ↗/);
     assert.match(html, /id="reading-form"/);
     assert.match(html, /The source includes a useful detail\./);

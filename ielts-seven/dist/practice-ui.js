@@ -17,7 +17,7 @@
     writing: '<path d="m15 4 5 5M4 20l5-1L21 7a2 2 0 0 0-4-4L5 15l-1 5Zm8 0h9"/>'
   };
   function create(options) {
-    const o = options || {}, root = o.root, E = o.engine, P = o.practice || host.IELTS_PRACTICE;
+    const o = options || {}, root = o.root, E = o.engine, P = o.practice || host.IELTS_PRACTICE, B = o.batches || host.IELTS_PRACTICE_BATCHES;
     if (!root || !E || !P || typeof o.getContext !== 'function') throw new Error('练习页面尚未准备好。');
     let selectedMode = 'guided', owner = null, session = null, sequence = 0, active = false;
     const modeById = new Map(P.modes.map(mode => [mode.id, mode]));
@@ -55,25 +55,45 @@
     function heading(title, description, eyebrow = 'YOUR PRACTICE, YOUR WAY', action = '') {
       return `<header class="practice-heading"><div><span class="practice-eyebrow">${eyebrow}</span><h1>${title}</h1><p>${description}</p></div>${action}</header>`;
     }
+    function batchPlan(latest) {
+      if (B?.build) return B.build(latest.state.records, latest.date, latest.state.preferences, E, {groupSize:6});
+      // Older cached pages can still start a small, capped session while the new module refreshes.
+      const records = latest.state.records, confirmedToday = record => record.reviewHistory?.some(event => event.date === latest.date);
+      const due = E.due(records, latest.date).filter(record => !confirmedToday(record));
+      const queue = E.studyQueue(records, latest.date, latest.state.preferences, due.filter(record => !record.needsContent).map(record => record.id));
+      const groups = [];
+      for (let index = 0; index < queue.length; index += 6) {
+        const recordIds = queue.slice(index,index+6).map(record => record.id);
+        groups.push({id:`ready-${index/6+1}`,label:`优先练习 · 第 ${index/6+1} 组`,recordIds,count:recordIds.length,stage:'recall',reason:'按当前个人复习安排练习，每次只专注一小组。'});
+      }
+      const needsContent = due.filter(record => record.needsContent).length;
+      return {groups,queueIds:queue.map(record => record.id),groupSize:6,needsContentIds:due.filter(record => record.needsContent).map(record => record.id),counts:{dueTotal:due.length,planned:queue.length,backlog:Math.max(0,due.length-queue.length-needsContent),completedToday:records.filter(confirmedToday).length,needsContent}};
+    }
+    function renderBatchPlan(plan, records) {
+      const counts = plan.counts;
+      const incompleteIds = plan.needsContentIds || [];
+      const incomplete = incompleteIds.map(id => records.find(record => record.id === id)).find(Boolean);
+      return `<section class="practice-batches" aria-labelledby="practice-groups-heading"><div class="practice-section-title"><h2 id="practice-groups-heading">按学习状态，分成小组</h2><p>每组最多 ${plan.groupSize} 词。先修复错误，再回忆到期词，最后理解新词。</p></div><div class="practice-batch-overview"><div><span>本轮安排</span><strong>${counts.planned}<small>词</small></strong></div><div><span>今日已确认</span><strong>${counts.completedToday}<small>词</small></strong></div><div><span>仍待后续安排</span><strong>${counts.backlog}<small>词</small></strong></div></div>${plan.groups.map((group,index) => `<div class="practice-batch" data-stage="${esc(group.stage)}"><span class="practice-batch-mark" aria-hidden="true">${String(index+1).padStart(2,'0')}</span><div><h3>${esc(group.label)}</h3><p>${esc(group.reason)}</p></div><span class="practice-batch-count">${group.count} 词</span>${button('batch','开始 <span aria-hidden="true">→</span>',`data-group="${esc(group.id)}"`,true)}</div>`).join('')}<p class="practice-batch-note">${counts.dueTotal} 个到期或待补词中，本轮安排 ${counts.planned} 个。${counts.backlog ? `其余 ${counts.backlog} 个保留原复习日期，可分轮继续；新词仍受每日上限约束。` : '每次确认后重新计算下一组。'}${counts.needsContent ? `另有 ${counts.needsContent} 个需先补充完整教案。` : ''}</p>${incomplete && counts.needsContent ? `<div class="practice-content-notice"><p>先补充完整教案，再把这些词加入练习安排。</p>${button('edit-missing','补充教案',`data-record="${esc(incomplete.id)}"`,true)}</div>` : ''}<details class="practice-group-rationale"><summary>分组依据</summary><p>优先修复词卡中尚未解决的错误；其后安排已经学过的到期词，再安排首次学习。符合条件的词会交错原始录入批次，避免只按导入顺序练习。分组不会改变个人间隔复习日期，也不会因浏览或切换方法增加学习次数。</p></details></section>`;
+    }
     function renderLanding(latest) {
       const signedIn = allowed(latest), records = signedIn ? latest.state.records : [];
-      const queue = signedIn ? E.studyQueue(records, latest.date, latest.state.preferences) : [];
-      const due = signedIn ? E.due(records, latest.date) : [];
+      const plan = signedIn ? batchPlan(latest) : null;
+      const queue = plan ? plan.queueIds.map(id => records.find(record => record.id === id)).filter(Boolean) : [];
       const active = modeById.get(selectedMode) || P.modes[0];
-      const groups = new Map();
-      for (const record of due) { const name = recordBatch(record); if (!groups.has(name)) groups.set(name, []); groups.get(name).push(record); }
       root.innerHTML = `<section class="practice-page">${heading('找到适合你的练习方式', '先理解，再回忆，再用起来。选择今天想练的一项，从自己的词库开始。')}
-        <section class="practice-hero" aria-labelledby="practice-selected-name"><div class="practice-hero-copy"><span class="practice-eyebrow">TODAY’S FOCUS</span><h2 id="practice-selected-name">${esc(active.name)}</h2><p>${esc(active.description)}</p><div class="practice-hero-meta"><span>${signedIn ? queue.length + ' 个优先词汇' : '登录后读取个人词库'}</span><span>由你明确确认后保存</span></div>${button('start', signedIn ? (queue.length ? '开始这一组 <span aria-hidden="true">→</span>' : '查看词库') : '登录并开始', !queue.length && signedIn ? 'data-empty="true"' : '')}</div><div class="practice-hero-art" aria-hidden="true"><span class="practice-art-back">RECALL</span><span class="practice-art-card">${icon(selectedMode)}<b>${esc(active.focus || 'PRACTICE')}</b><i>Make it yours.</i></span><span class="practice-art-dot"></span></div></section>
+        <section class="practice-hero" aria-labelledby="practice-selected-name"><div class="practice-hero-copy"><span class="practice-eyebrow">TODAY’S FOCUS</span><h2 id="practice-selected-name">${esc(active.name)}</h2><p>${esc(active.description)}</p><div class="practice-hero-meta"><span>${signedIn ? (plan.groups[0] ? `当前小组 ${plan.groups[0].count} 词 · 本轮 ${queue.length} 词` : '本轮暂无可练词汇') : '登录后读取个人词库'}</span><span>由你明确确认后保存</span></div>${button('start', signedIn ? (queue.length ? '开始这一小组 <span aria-hidden="true">→</span>' : '查看词库') : '登录并开始', !queue.length && signedIn ? 'data-empty="true"' : '')}</div><div class="practice-hero-art" aria-hidden="true"><span class="practice-art-back">RECALL</span><span class="practice-art-card">${icon(selectedMode)}<b>${esc(active.focus || 'PRACTICE')}</b><i>Make it yours.</i></span><span class="practice-art-dot"></span></div></section>
         <div class="practice-section-title"><h2>八种方式，一份自己的词库</h2><p>每次选择一种，学习中也可以切换。</p></div><div class="practice-mode-grid" role="group" aria-label="选择练习方式">${P.modes.map((mode, index) => {
           const count = queue.filter(record => available(mode.id, record, records).available && !(mode.id === 'guided' && record.needsContent)).length;
           return `<button type="button" class="practice-mode-card ${mode.id === selectedMode ? 'is-selected' : ''}" aria-pressed="${mode.id === selectedMode}" data-action="practice-mode" data-mode="${esc(mode.id)}"><span class="practice-mode-top"><span class="practice-mode-icon">${icon(mode.id)}</span><span class="practice-mode-number">0${index + 1}</span></span><span class="practice-mode-name">${esc(mode.name)}<span class="practice-selected-dot" aria-hidden="true"></span></span><span class="practice-mode-description">${esc(mode.description)}</span><span class="practice-mode-foot">${esc(mode.focus || '')}<span>${signedIn ? count + ' 词可练' : '个人词库'}</span></span></button>`;
         }).join('')}</div>
-        ${!signedIn ? `<div class="practice-notice"><strong>你的练习，只属于你。</strong><p>先登录邮箱，即可读取自己的词库与安排。</p>${button('login', '邮箱登录', '', true)}</div>` : !queue.length ? `<section class="practice-empty"><h2>${!records.length ? '从第一个陌生词开始' : due.length ? '今天的新词量已完成' : '今天暂时没有到期词汇'}</h2><p>${!records.length ? '把想学的词或短语加入词库，补充教案后即可练习。' : due.length ? '你可以回看词卡，或明天继续下一组。' : '复习会按已有安排出现；现在也可以去词库回看。'}</p><a href="#library" class="practice-link">打开我的词库 <span aria-hidden="true">↗</span></a></section>` : `<section class="practice-batches"><div class="practice-section-title"><h2>也可以按批次开始</h2><p>${due.length} 个到期或待补词汇，按每日安排分组练习。</p></div>${[...groups].map(([name, words], index) => `<div class="practice-batch"><span class="practice-batch-mark" aria-hidden="true">↻</span><div><h3>${esc(name)}</h3><p>${esc(words.slice(0, 3).map(record => record.word).join(' / '))}</p></div><span class="practice-batch-count">${words.length} 词</span>${button('batch', '开始 <span aria-hidden="true">→</span>', `data-batch="${index}"`, true)}</div>`).join('')}</section>`}
+        ${!signedIn ? `<div class="practice-notice"><strong>你的练习，只属于你。</strong><p>先登录邮箱，即可读取自己的词库与安排。</p>${button('login', '邮箱登录', '', true)}</div>` : !queue.length ? `<section class="practice-empty"><h2>${!records.length ? '从第一个陌生词开始' : plan.counts.needsContent ? '先补充词卡，再开始练习' : plan.counts.backlog ? '今天的新词量已完成' : '今天暂时没有到期词汇'}</h2><p>${!records.length ? '把想学的词或短语加入词库，补充教案后即可练习。' : plan.counts.needsContent ? '这些词的讲解还不完整，补充后会按个人安排加入小组。' : plan.counts.backlog ? '你可以回看词卡，或明天继续下一组。' : '复习会按已有安排出现；现在也可以去词库回看。'}</p><a href="#library" class="practice-link">打开我的词库 <span aria-hidden="true">↗</span></a></section>${records.length && (plan.counts.dueTotal || plan.counts.completedToday) ? renderBatchPlan(plan,records) : ''}` : renderBatchPlan(plan,records)}
         <details class="practice-principles"><summary>怎样记录这次练习？</summary><p>查看、翻卡和核对都不会自动增加学习次数。完成后由你确认保存；客观核对、自评与讲解学习会分别显示。提示后的答案会单独标记，造句由你自行对照词卡评估。</p></details></section>`;
     }
     function start(selectedIds = null) {
       const latest = requireOwner(); if (!latest) return false;
-      const queue = E.studyQueue(latest.state.records, latest.date, latest.state.preferences, selectedIds);
+      const plan = batchPlan(latest), requested = selectedIds === null ? null : new Set(Array.isArray(selectedIds) ? selectedIds : []);
+      const ids = requested ? plan.queueIds.filter(id => requested.has(id)).slice(0,plan.groupSize) : plan.groups[0]?.recordIds || [];
+      const queue = ids.map(id => latest.state.records.find(record => record.id === id)).filter(Boolean);
       if (!queue.length) { clearSession(); render(); toast(latest.state.records.length ? '这组暂时没有可练词汇，请查看词库或下一次安排。' : '先把想学的词加入个人词库。'); return false; }
       clearSession();
       session = {token:tokenOf(latest),ids:queue.map(record => record.id),index:0,mode:selectedMode,card:null,results:[],run:++sequence,exposed:false,firstAttempt:null};
@@ -83,6 +103,10 @@
       if (!session || !allowed(latest, session.token) || session.index >= session.ids.length) return null;
       const record = latest.state.records.find(item => item.id === session.ids[session.index]);
       if (!record) { clearSession(); toast('词库已更新，请重新选择这一组。'); return null; }
+      const scheduled = E.dueDate(record);
+      if (record.level === 'C' || !scheduled || scheduled > latest.date || record.reviewHistory?.some(event => event.date === latest.date)) {
+        clearSession(); toast('这个词的学习安排已更新，请从当前小组继续。'); return null;
+      }
       const contentKey = JSON.stringify([record.word,record.displayWord,record.meaning,record.ipa,record.pos,record.example,record.exampleEn,record.exampleZh,record.collocations,record.memory,record.family,record.synonyms,record.needsContent]);
       if (session.card && session.card.contentKey !== contentKey) {
         stopAudio(); session.card = null; session.firstAttempt = null; session.exposed = true;
@@ -176,13 +200,18 @@
       if (name === 'next-group') { start(); return true; }
       if (name === 'batch') {
         if (!requireOwner()) return true;
-        const groups = new Map();
-        for (const record of E.due(latest.state.records, latest.date)) { const group = recordBatch(record); if (!groups.has(group)) groups.set(group, []); groups.get(group).push(record.id); }
-        const index = Number(dataset.batch), ids = Number.isInteger(index) ? [...groups.values()][index] : null;
-        if (ids) start(ids); return true;
+        const group = batchPlan(latest).groups.find(item => item.id === dataset.group);
+        if (group) start(group.recordIds); else { render(); toast('分组已更新，请选择当前的小组。'); }
+        return true;
+      }
+      if (name === 'edit-missing') {
+        if (!requireOwner()) return true;
+        const record = latest.state.records.find(item => item.id === dataset.record && item.needsContent && item.level !== 'C');
+        if (record) { stopAudio(); o.onEdit?.(record.id); }
+        return true;
       }
       if (!allowed(latest) || !session || !allowed(latest, session.token)) { o.requireAccount?.(); return true; }
-      const item = currentCard(latest); if (!item) return true;
+      const item = currentCard(latest); if (!item) { render(); return true; }
       const {record,card} = item, ex = card.exercise;
       if (dataset.card !== undefined && String(dataset.card) !== String(card.key)) return true;
       if (name === 'guided') { stopAudio(); session.exposed = true; selectedMode = 'guided'; session.mode = 'guided'; session.card = null; render(); return true; }
@@ -232,7 +261,8 @@
       if (!target || target.dataset?.practiceInput !== 'answer') return false;
       if (!isActive()) return true;
       const latest = context(); if (!session || !allowed(latest, session.token)) return true;
-      const item = currentCard(latest); if (!item || !item.card.available || item.card.grade || !['text','writing'].includes(item.card.exercise?.kind)) return true;
+      const item = currentCard(latest); if (!item) { render(); return true; }
+      if (!item.card.available || item.card.grade || !['text','writing'].includes(item.card.exercise?.kind)) return true;
       if (target.dataset.card !== undefined && String(target.dataset.card) !== String(item.card.key)) return true;
       item.card.answer = String(target.value ?? ''); item.card.validation = ''; return true;
     }
