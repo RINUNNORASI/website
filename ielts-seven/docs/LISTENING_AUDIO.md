@@ -1,97 +1,102 @@
-# Bundled original listening audio
+# Bundled open-source neural listening audio
 
-The three MP3 files under `dist/assets/listening/` speak this site's existing
-original exercise scripts from `dist/listening-data.js`. They contain no official
-IELTS questions, recordings, or transcripts. They are **offline synthesized US
-English speech**, not human recordings or official IELTS test material. The audio
-and the already published original scripts describe exactly the same exercises.
+The three MP3 files under `dist/assets/listening/` speak this site's exact existing
+original exercise scripts from `dist/listening-data.js`. They are **Kokoro-82M
+neural synthetic British English**, not human recordings or official IELTS test
+material. The receptionist and narrator use `bf_emma`; the caller uses
+`bm_george`. Dialogue role labels are omitted, while all authored words, spelling,
+numbers, dates, and answers are preserved.
 
 ## Playback and reproduction
 
-The MP3 files are ordinary same-origin media assets. Playing them does not require
-browser speech synthesis, installed device voices, a voice API, or a third-party
-audio host. This fixes the dependency that could leave the original exercises
-silent on devices without an available English speech synthesis voice. Browser
-user-gesture and media playback policies still apply.
+The bundled MP3s play as ordinary same-origin media. Listeners do not need a
+speech API, device voices, browser speech synthesis, Python, or the model files.
+The 326 MB model and 28 MB voice bundle are used only on a developer machine and
+are not shipped to the website, its browsers, or its hosting services.
 
-To regenerate on a developer machine with the listed tools already installed:
+For regeneration, use Python 3.12, Node.js, and FFmpeg/ffprobe with libmp3lame.
+Create the environment and place model downloads **outside the repository**:
 
 ```sh
-python3 scripts/generate-listening-audio.py
+python3 -m venv /tmp/xunci-neural-tts-venv
+/tmp/xunci-neural-tts-venv/bin/pip install -r scripts/listening-audio-requirements.txt
+mkdir -p /tmp/xunci-neural-models
+curl --fail --location --output /tmp/xunci-neural-models/kokoro-v1.0.onnx https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.1/kokoro-v1.0.onnx
+curl --fail --location --output /tmp/xunci-neural-models/voices-v1.0.bin https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.1/voices-v1.0.bin
+OMP_NUM_THREADS=2 /tmp/xunci-neural-tts-venv/bin/python scripts/generate-listening-audio.py --model /tmp/xunci-neural-models/kokoro-v1.0.onnx --voices /tmp/xunci-neural-models/voices-v1.0.bin
 ```
 
-The generator reads only the `originals` collection. It invokes local FFmpeg Flite
-voices and uses temporary PCM files; it does not fetch a model, access the network,
-or copy generator binaries/voice models into the repository. It uses `slt` for
-monologues and the receptionist, and `rms` for the caller. Role labels are omitted
-from the spoken dialogue; apostrophes are normalized for Flite's tokenizer.
+The generator verifies both model SHA-256 values against the public release
+metadata before loading them. Generation itself runs offline, reads only the
+`originals` collection, stages all audio before replacing the published files,
+and writes `manifest.json` with engine/model/voice/script/audio provenance.
+It also updates each original lesson's audio URL with `?v=<first 12 audio SHA-256
+characters>` so refreshed pages request the current recording after regeneration.
+The public scripts, questions, expected answers, and official sample recordings
+are unchanged.
 
-Each turn is paced to approximately 145 words per minute without changing pitch,
-with 0.38-second gaps between dialogue turns. Including pauses, the resulting
-rates are approximately 130–143 words per minute. These are clear practice speeds,
-not a claim to reproduce the speed or accent of an IELTS examiner. Encoding is
-24 kHz mono MP3 at 48 kbit/s, with loudness normalization to a target of -16 LUFS
-and a true-peak limit of -1.5 dBTP.
+Generation uses the neural model's own duration prediction at speed `0.90`,
+British phonemization (`en-gb`), 0.35-second gaps between dialogue turns, and a
+short leading/trailing pause. There is no forced uniform words-per-minute time
+stretch. Encoding is **24 kHz mono MP3 at 80 kbit/s**, with loudness normalization
+to a target of -16 LUFS and a true-peak limit of -1.5 dBTP. These remain original
+practice clips, not a reproduction of IELTS exam timing or examiner delivery.
 
-Generation environment: FFmpeg `7.1.5-0+deb13u1`, Debian `libflite1 2.2-7`,
-`libmp3lame0 3.100-6+b3`. Different tool versions may produce different binary
-hashes while preserving the script and playback format.
+Pinned runtime: `kokoro-onnx 0.6.1`, `onnxruntime 1.31.0`, `numpy 2.5.4`,
+`soundfile 0.14.0`, `phonemizer 3.4.0`, `espeakng-loader 0.2.4`.
+FFmpeg `7.1.5-0+deb13u1`, libmp3lame `3.100-6+b3`. Full precision model:
+`Kokoro-82M v1.0`, `model-files-v1.1` ONNX export. Different platforms can produce
+different audio binary hashes; each regeneration records its actual hashes.
 
 ## Asset verification
 
-All three files were independently parsed with ffprobe and fully decoded with
-FFmpeg. They have one MP3 audio stream. Decoded PCM length and signal levels were
-checked to reject empty, truncated, or silent output. This is format/signal
-verification; it does not claim a browser or human listening test.
+Every MP3 is parsed with ffprobe and fully decoded by FFmpeg. Codec, sample rate,
+bitrate, duration, PCM RMS, peak, and non-silent fraction are checked to reject
+empty, truncated, extremely quiet, or clipped files. This is format and signal
+verification, not a claim of a human listening or browser/device playback test.
 
 | Asset | Bytes | Decoded duration | Overall words/min | PCM RMS dBFS | PCM peak dBFS |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| `library-workshop.mp3` | 233165 | 38.74 s | 130.1 | -16.85 | -2.10 |
-| `riverside-volunteers.mp3` | 265133 | 44.08 s | 142.9 | -15.75 | -4.08 |
-| `urban-shade-study.mp3` | 250301 | 41.60 s | 142.8 | -15.79 | -3.25 |
+| `library-workshop.mp3` | 334472 | 33.36 s | 151.1 | -16.04 | -1.63 |
+| `riverside-volunteers.mp3` | 335912 | 33.49 s | 188.1 | -16.61 | -1.81 |
+| `urban-shade-study.mp3` | 383672 | 38.26 s | 155.3 | -16.55 | -1.77 |
 
-Total size: **748599 bytes**. SHA-256 values:
+Total size: **1054056 bytes**. SHA-256 values:
 
 | Asset | Audio SHA-256 | Exact original UTF-8 `script` SHA-256 |
 | --- | --- | --- |
-| `library-workshop.mp3` | `20285d595a415b83c9ed41ee3dffad818f850073f325bca85a502dde36dfbf04` | `5fabcd4c9c763e6142de93fc206dee1fcaf342b3f1ebb45c29564f4938e70dec` |
-| `riverside-volunteers.mp3` | `e3c84b9f56fd43b9dde9878fa56f2e5b306708a7dcff1fa776b26b52ddd3557f` | `e87514ec70c7e54ca24b45454a197131601bd55065b97e59e7b0eff21cba7df1` |
-| `urban-shade-study.mp3` | `87641ba174ae79ee19136d4ce9552aa3655c9a0523db102c7e4ea5dab56bbca9` | `b5a5d6029104d8c7845b2a98d04eac3da2ddba1c1395ad14146df9833522cccc` |
+| `library-workshop.mp3` | `a33392f30d07fdb9b963cd3bdf1f38e22fb0243bbe21794269004d90d3b418f9` | `5fabcd4c9c763e6142de93fc206dee1fcaf342b3f1ebb45c29564f4938e70dec` |
+| `riverside-volunteers.mp3` | `862857fb40d64a335cc0d86233dfde893911c08f1a5eb56463f0ab18b1f7650f` | `e87514ec70c7e54ca24b45454a197131601bd55065b97e59e7b0eff21cba7df1` |
+| `urban-shade-study.mp3` | `baf2462781a4d64c48c3588dd0aecfd15508e909dc3eb462dcc0be7263bb4c08` | `b5a5d6029104d8c7845b2a98d04eac3da2ddba1c1395ad14146df9833522cccc` |
 
-## Generator attribution and license context
+Model SHA-256: `beb0d1848dee9a49da392cc3df26958d46cfa35d321edf434f52949153f0df3a`.
+Voice-bundle SHA-256: `bca610b8308e8d99f32e6fe4197e7ec01679264efed0cac9140fe9c29f1fbf7d`.
 
-Flite is by the Language Technologies Institute at Carnegie Mellon University,
-Alan W Black, David Huggins-Daines, and other contributors. The locally installed
-Debian package's `/usr/share/doc/libflite1/copyright` was inspected for attribution
-and terms. Its general Flite software permission notice is reproduced below for
-clarity; no Flite source code, executable, or voice model is redistributed here.
-The original exercise text remains the site's own content. This generated output
-does not imply an endorsement by the voice authors or universities.
+## Attribution and license sources
 
-> Copyright (c) 1999-2001 by Language Technologies Institute,
-> Carnegie Mellon University. All Rights Reserved.
->
-> Permission is hereby granted, free of charge, to use and distribute
-> this software and its documentation without restriction, including
-> without limitation the rights to use, copy, modify, merge, publish,
-> distribute, sublicense, and/or sell copies of this work, and to
-> permit persons to whom this work is furnished to do so, subject to
-> the following conditions:
->
-> 1. The code must retain the above copyright notice, this list of
->    conditions and the following disclaimer.
-> 2. Any modifications must be clearly marked as such.
-> 3. Original authors' names are not deleted.
-> 4. The authors' names are not used to endorse or promote products
->    derived from this software without specific prior written
->    permission.
->
-> CARNEGIE MELLON UNIVERSITY AND THE CONTRIBUTORS TO THIS WORK
-> DISCLAIM ALL WARRANTIES WITH REGARD TO THIS SOFTWARE, INCLUDING
-> ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS, IN NO EVENT
-> SHALL CARNEGIE MELLON UNIVERSITY NOR THE CONTRIBUTORS BE LIABLE
-> FOR ANY SPECIAL, INDIRECT OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
-> WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN
-> AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION,
-> ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF
-> THIS SOFTWARE.
+- [Kokoro-82M model card](https://huggingface.co/hexgrad/Kokoro-82M):
+  hexgrad, Apache-2.0 licensed model weights.
+- [Official voice list](https://huggingface.co/hexgrad/Kokoro-82M/blob/main/VOICES.md):
+  `bf_emma` and `bm_george` are the selected British English presets published with
+  the model. No private recordings, uploaded identities, or voice cloning are used.
+- [kokoro-onnx source and license](https://github.com/thewh1teagle/kokoro-onnx):
+  thewh1teagle, MIT runtime; its README separately identifies the model as Apache-2.0.
+- [Verified public model export release](https://github.com/thewh1teagle/kokoro-onnx/releases/tag/model-files-v1.1):
+  download sizes and SHA-256 digests for the full precision model and voice bundle.
+- [Phonemizer](https://github.com/bootphon/phonemizer) and
+  [eSpeak NG](https://github.com/espeak-ng/espeak-ng) provide local text-to-phoneme
+  preprocessing under their GPL licenses; their source/binaries are not copied
+  into this website. The audible waveform is generated by Kokoro, not eSpeak.
+
+Only generated audio, the site's original text, provenance, and the site's own
+small regeneration script are published here. Model weights and third-party
+runtime source/binaries are not redistributed. Attribution does not imply
+endorsement by model, voice, runtime, or IELTS authors.
+
+An independent local Whisper tiny.en recognizer also decoded all three final
+MP3s. All 12 answer-bearing items were recovered: Mason and M-A-S-O-N, Tuesday,
+6:15, eight pounds; the change from 17 to 18 May, north gate, 24 volunteers, water
+bottle; 48 locations, six weeks, surface temperature, and interviews. This is a
+secondary intelligibility check, not a human pronunciation or naturalness score.
+The recognizer made minor substitutions in non-answer phrases, so its output is
+not treated as a replacement transcript or proof of perfect pronunciation.

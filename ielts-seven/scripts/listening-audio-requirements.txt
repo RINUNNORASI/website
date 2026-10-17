@@ -1,0 +1,7 @@
+# Offline developer generator only; no Python/model dependency on website hosts.
+kokoro-onnx==0.6.1
+onnxruntime==1.31.0
+numpy==2.5.4
+soundfile==0.14.0
+phonemizer==3.4.0
+espeakng-loader==0.2.4

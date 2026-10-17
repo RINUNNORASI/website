@@ -1,0 +1,90 @@
+{
+  "engine": "kokoro-onnx",
+  "engine_version": "0.6.1",
+  "engine_license": "MIT",
+  "model": "Kokoro-82M v1.0 FP32 ONNX",
+  "model_license": "Apache-2.0",
+  "model_release": "https://github.com/thewh1teagle/kokoro-onnx/releases/tag/model-files-v1.1",
+  "model_sha256": "beb0d1848dee9a49da392cc3df26958d46cfa35d321edf434f52949153f0df3a",
+  "voices_sha256": "bca610b8308e8d99f32e6fe4197e7ec01679264efed0cac9140fe9c29f1fbf7d",
+  "language": "en-gb",
+  "voices": {
+    "Receptionist": "bf_emma",
+    "Caller": "bm_george"
+  },
+  "narrator_voice": "bf_emma",
+  "speed": 0.9,
+  "turn_pause_seconds": 0.35,
+  "format": {
+    "codec": "mp3",
+    "sample_rate": 24000,
+    "channels": 1,
+    "bit_rate": 80000
+  },
+  "package_versions": {
+    "kokoro-onnx": "0.6.1",
+    "onnxruntime": "1.31.0",
+    "numpy": "2.5.4",
+    "soundfile": "0.14.0",
+    "phonemizer": "3.4.0",
+    "espeakng-loader": "0.2.4"
+  },
+  "total_bytes": 1054056,
+  "assets": [
+    {
+      "filename": "library-workshop.mp3",
+      "bytes": 334472,
+      "seconds": 33.36,
+      "sha256": "a33392f30d07fdb9b963cd3bdf1f38e22fb0243bbe21794269004d90d3b418f9",
+      "rms_dbfs": -16.04,
+      "peak_dbfs": -1.63,
+      "audible_percent": 63.64,
+      "sample_rate": 24000,
+      "bit_rate": 80000,
+      "id": "library-workshop",
+      "script_sha256": "5fabcd4c9c763e6142de93fc206dee1fcaf342b3f1ebb45c29564f4938e70dec",
+      "voices": [
+        "bf_emma",
+        "bm_george"
+      ],
+      "words": 84,
+      "overall_wpm": 151.1
+    },
+    {
+      "filename": "riverside-volunteers.mp3",
+      "bytes": 335912,
+      "seconds": 33.49,
+      "sha256": "862857fb40d64a335cc0d86233dfde893911c08f1a5eb56463f0ab18b1f7650f",
+      "rms_dbfs": -16.61,
+      "peak_dbfs": -1.81,
+      "audible_percent": 65.82,
+      "sample_rate": 24000,
+      "bit_rate": 80000,
+      "id": "riverside-volunteers",
+      "script_sha256": "e87514ec70c7e54ca24b45454a197131601bd55065b97e59e7b0eff21cba7df1",
+      "voices": [
+        "bf_emma"
+      ],
+      "words": 105,
+      "overall_wpm": 188.1
+    },
+    {
+      "filename": "urban-shade-study.mp3",
+      "bytes": 383672,
+      "seconds": 38.26,
+      "sha256": "baf2462781a4d64c48c3588dd0aecfd15508e909dc3eb462dcc0be7263bb4c08",
+      "rms_dbfs": -16.55,
+      "peak_dbfs": -1.77,
+      "audible_percent": 66.83,
+      "sample_rate": 24000,
+      "bit_rate": 80000,
+      "id": "urban-shade-study",
+      "script_sha256": "b5a5d6029104d8c7845b2a98d04eac3da2ddba1c1395ad14146df9833522cccc",
+      "voices": [
+        "bf_emma"
+      ],
+      "words": 99,
+      "overall_wpm": 155.3
+    }
+  ]
+}

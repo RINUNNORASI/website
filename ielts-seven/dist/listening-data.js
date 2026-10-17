@@ -7,7 +7,7 @@
   'use strict';
   const originals = [
     {
-      id:'library-workshop',kind:'original',audioUrl:'/assets/listening/library-workshop.mp3',title:'预约图书馆工作坊',focus:'姓名拼写 · 星期 · 时间 · 费用',minutes:5,
+      id:'library-workshop',kind:'original',audioUrl:'/assets/listening/library-workshop.mp3?v=a33392f30d07',title:'预约图书馆工作坊',focus:'姓名拼写 · 星期 · 时间 · 费用',minutes:5,
       description:'听一段原创预约对话，先抓住来电目的，再记录四项具体信息。',
       gistPrompt:'来电者想预约什么？先用一句话记录，不必逐字听写。',
       script:'Receptionist: Good morning, Greenway Library. How can I help? Caller: I would like to book a place on the photography workshop. Receptionist: Of course. May I have your surname? Caller: It is Mason. M, A, S, O, N. Receptionist: Thank you. The workshop is on Tuesday. Caller: Does it start at six? Receptionist: Nearly. It starts at six fifteen in the evening and lasts for one hour. Caller: And how much does it cost? Receptionist: It is eight pounds. Please bring your own camera. Caller: That is fine. Please book one place for me.',
@@ -19,7 +19,7 @@
       ]
     },
     {
-      id:'riverside-volunteers',kind:'original',audioUrl:'/assets/listening/riverside-volunteers.mp3',title:'河岸志愿活动通知',focus:'日期 · 地点 · 数量 · 随身物品',minutes:6,
+      id:'riverside-volunteers',kind:'original',audioUrl:'/assets/listening/riverside-volunteers.mp3?v=862857fb40d6',title:'河岸志愿活动通知',focus:'日期 · 地点 · 数量 · 随身物品',minutes:6,
       description:'听一则原创活动通知，留意更正信息，记录最终确认的安排。',
       gistPrompt:'这则通知面向谁？活动主要做什么？先记主旨。',
       script:'Hello everyone. Here are the final arrangements for our riverside clean-up. We originally planned to meet on the seventeenth of May, but the event will now take place on the eighteenth of May. Please meet at the north gate of Riverside Park at nine thirty in the morning. We have twenty-four volunteers, so we will work in four teams of six. Gloves and bags will be provided. You need to bring a water bottle. There is no need to bring food because lunch will be available at the visitor centre. If it rains heavily, we will send you a message by eight o’clock that morning.',
@@ -31,7 +31,7 @@
       ]
     },
     {
-      id:'urban-shade-study',kind:'original',audioUrl:'/assets/listening/urban-shade-study.mp3',title:'一项城市遮阴研究',focus:'研究范围 · 数字 · 指标 · 限定条件',minutes:6,
+      id:'urban-shade-study',kind:'original',audioUrl:'/assets/listening/urban-shade-study.mp3?v=baf2462781a4',title:'一项城市遮阴研究',focus:'研究范围 · 数字 · 指标 · 限定条件',minutes:6,
       description:'听一段原创研究简介，区分实际测量结果和研究尚未证明的事情。',
       gistPrompt:'研究比较了什么？不要把温度变化直接写成健康结论。',
       script:'Today I will describe a small study of shade in an urban neighbourhood. Our team selected forty-eight street locations and collected measurements for six weeks in July and August. Half of the locations had mature trees; the others had very little shade. At each location, we measured surface temperature at two o’clock in the afternoon. On sunny days, the shaded surfaces were cooler. However, we did not measure residents’ health or their daily exercise. The findings therefore describe temperature at these locations, rather than proving that trees improved people’s health. Our next study will include interviews with local residents.',

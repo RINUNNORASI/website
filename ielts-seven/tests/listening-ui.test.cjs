@@ -27,7 +27,7 @@ function harness(){
 }
 
 test('public originals use bundled MP3s without device speech or exposing the script',()=>{
-  const h=harness();assert.match(h.html,/站内 MP3 · 原创合成语音/);assert.match(h.html,/非真人录音，非 IELTS 真题/);assert.match(h.html,/离线合成美式英语/);assert.match(h.html,/本轮笔记仅暂存在当前会话/);assert.equal(h.audioSrc(),D.originals[0].audioUrl);assert.match(h.audioSrc(),/^\/assets\/listening\/.+\.mp3$/);assert.doesNotMatch(h.html,/Good morning, Greenway Library/);assert.equal(h.context.state.records.length,0);assert.equal(h.ui.handleAction('unrelated'),false);
+  const h=harness();assert.match(h.html,/站内 MP3 · 原创合成语音/);assert.match(h.html,/非真人录音，非 IELTS 真题/);assert.match(h.html,/Kokoro 开源模型 · 英式英语/);assert.match(h.html,/本轮笔记仅暂存在当前会话/);assert.equal(h.audioSrc(),D.originals[0].audioUrl);assert.match(h.audioSrc(),/^\/assets\/listening\/.+\.mp3(?:\?v=[a-f0-9]{12})?$/);assert.doesNotMatch(h.html,/Good morning, Greenway Library/);assert.equal(h.context.state.records.length,0);assert.equal(h.ui.handleAction('unrelated'),false);
 });
 
 test('pending, rejected or synchronously blocked native play never enables original grading',()=>{
